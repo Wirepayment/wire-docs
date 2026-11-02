@@ -1,0 +1,37 @@
+---
+title: Node SDK
+description: Official TypeScript SDK for the Wire payment API.
+---
+
+The official TypeScript SDK for [Wire](https://wire.mn). Zero runtime
+dependencies; works on Node 18+.
+
+- **Repository:** [github.com/buildry-wire/wire-node](https://github.com/buildry-wire/wire-node)
+- **Package:** [npmjs.com/package/@buildry-wire/wire](https://www.npmjs.com/package/@buildry-wire/wire)
+
+## Install
+
+```bash
+npm install @buildry-wire/wire
+```
+
+## Initialize and make a call
+
+```ts
+import { Wire } from "@buildry-wire/wire";
+
+const wire = new Wire("sk_live_...");
+
+const pi = await wire.paymentIntents.create({
+  amount: 15000,                 // 15,000 ₮ — whole tögrög
+  currency: "MNT",
+  idempotencyKey: "order-1001",
+});
+console.log(pi.id, pi.status);
+```
+
+## Learn more
+
+- [Quickstart](/docs/quickstart)
+- [Webhooks](/docs/guides/webhooks) — `wire.webhooks.verify`
+- [API reference](/docs/api)

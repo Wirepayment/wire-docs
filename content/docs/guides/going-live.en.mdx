@@ -1,0 +1,79 @@
+---
+title: Activating an operator
+description: Apply → review → electronic agreement → payments activate. The full path to accepting live payments.
+---
+
+To accept payments, you activate one of **the operators enabled for your
+account**.
+The flow has four steps:
+
+<Callout type="info">
+  Activation happens entirely in the dashboard — no code required. Once an
+  operator is active and switched on for your project, nothing changes on the
+  API side: PaymentIntents created without `allowed_operators` can use it
+  automatically.
+</Callout>
+
+## 1. Apply
+
+Pick an operator under **Connectors** in the dashboard and fill in the
+step-by-step application:
+
+- **Registration type** — individual or company.
+- **Core details** — name, registration number, business activity. Individuals
+  can fill these in one tap from their **verified citizen identity (DAN)**.
+- **Address & contact** — location, phone, email. Your account email and
+  verified phone are one tap away too.
+- **Settlement account** — pick one of your linked bank accounts, or link a
+  new one right in this step.
+
+Review everything on the final step before submitting.
+
+## 2. Review
+
+The Wire team reviews applications during business hours. You are notified of
+the decision **by email**, and the connector page tracks progress as staged
+states (Details → Review → Active). If an application is declined you see the
+reason, and the form comes back pre-filled so you only fix what was flagged.
+
+## 3. Conclude the electronic agreement
+
+Once your application is approved, you conclude the operator's **service
+agreement electronically**:
+
+1. Open and read the full agreement **as a PDF** (the confirmations unlock
+   only after you have opened it).
+2. Confirm you have read the fee schedule and the prohibited-services list.
+3. Sign with your **verified citizen identity (DAN)** — legally equivalent to
+   a written signature.
+
+The agreement's merchant section carries the details you submitted in your
+application; the signature block carries your verified name and registration
+number. You can **view or download the signed PDF** from the connector page
+at any time.
+
+## 4. Payments activate
+
+As soon as the agreement is concluded the connection activates automatically
+and the operator becomes available in:
+
+- the payment options on [Hosted checkout](/docs/guides/hosted-checkout),
+- the payment page for [Payment links](/docs/guides/payment-links),
+- the API — automatic routing, and `allowed_operators` if you narrow it.
+
+Each **project** must also switch the operator on (project → Connectors).
+Until it does, payments created with that project's API key cannot use the
+operator, and the API answers `connector_required`.
+
+## Pausing and resuming
+
+Every active operator has a switch on the **Connectors** page. While switched
+off, no new payments are created through that operator (it is removed from
+automatic routing and the payment page); the connection and its configuration
+stay intact and resume instantly when switched back on.
+
+<Callout type="warn">
+  Owner verification (phone + citizen identity) must be completed before an
+  operator can be activated — see the
+  [Quickstart](/docs/quickstart).
+</Callout>

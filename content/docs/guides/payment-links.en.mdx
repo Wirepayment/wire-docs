@@ -1,0 +1,63 @@
+---
+title: Payment links
+description: Create reusable, no-code payment links and share them — easy for anyone.
+---
+
+A payment link is the easiest way to get paid without writing code. You create a
+link from the dashboard and share it over chat, a post, or email. Your customer
+taps the link and pays with any operator enabled on your account.
+
+<Callout type="info">
+  This is a **no-code** feature — you don't need to be a developer, just the
+  dashboard. If you'd rather integrate in code, see
+  [Hosted checkout](/docs/guides/hosted-checkout).
+</Callout>
+
+## How it works
+
+1. **Create a link** — in the dashboard's "Payment links" section, set a title,
+   a **transaction description** (optional), and amount.
+2. **Share** — copy the `pay.wire.mn/link/{slug}` URL, share it as a QR code, or
+   post it on social (with a rich image preview).
+3. **Customer pays** — the link opens a Wire-hosted payment page showing a QR
+   code and bank deeplinks.
+4. **Confirm** — verify the result from the `payment_intent.succeeded` webhook
+   ([Webhooks](/docs/guides/webhooks)).
+
+## Amount types
+
+- **Fixed amount** — the customer pays the amount you set (e.g. a monthly
+  membership).
+- **Open amount** — the customer enters their own amount. You can set a minimum
+  (donations, pay-what-you-want).
+
+Amounts are **whole tögrög** (MNT has no minor unit).
+
+## Transaction description
+
+Each link can carry a **transaction description** (optional, up to 500
+characters). This is the memo shown to the payer on the payment — e.g. "Order
+#1024" or "September service fee". Leave it empty for a payment with no memo.
+The title is only an internal name in your dashboard, whereas the transaction
+description is what the customer sees.
+
+## Reusable, with stats
+
+One link accepts many payments — no need to mint a new link each time. The
+dashboard shows each link's payment count and total volume collected. You can
+**deactivate** a link and later **re-activate** it.
+
+## Sharing
+
+Every link comes with:
+
+- **Copy** — a short, readable `pay.wire.mn/link/{slug}` URL.
+- **QR code** — print it or show it on screen.
+- **Social share** — sharing the link on Facebook, Instagram, or LinkedIn shows
+  a rich **image preview** with your name and amount automatically.
+
+## Links and payments
+
+Every payment made through a payment link is recorded as a normal
+**PaymentIntent + Charge** — reported and webhooked exactly like an
+API-created payment. No-code links and API payments converge in one place.

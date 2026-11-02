@@ -1,0 +1,34 @@
+---
+title: Money and time
+description: How Wire represents amounts and timestamps.
+---
+
+## Money
+
+All amounts are **whole Mongolian tögrög (MNT) as integers** — there is no
+fractional part and no "cents".
+
+- `15000` means **15,000 ₮**. `50000` means **50,000 ₮**.
+- The currency is `MNT`.
+- Never send decimals or floats; pass whole integers.
+- A single PaymentIntent can be 1 to 1,000,000,000 ₮ (an operator may enforce
+  its own minimum).
+
+```json
+{ "amount": 15000, "currency": "MNT" }
+```
+
+Display the number as-is with a thousands separator (`15,000 ₮`) — do **not**
+divide by 100.
+
+## Time
+
+All timestamps are **Unix seconds in UTC** (e.g. `created`, `expires_at`).
+
+- Store and compare timestamps in UTC.
+- For display in Mongolia, convert to **Asia/Ulaanbaatar** and format as
+  `YYYY-MM-DD HH:MM:SS`.
+
+```text
+created = 1717000000   →  2024-05-30 00:26:40 (Asia/Ulaanbaatar)
+```

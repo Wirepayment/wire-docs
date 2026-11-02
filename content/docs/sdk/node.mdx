@@ -1,0 +1,37 @@
+---
+title: Node SDK
+description: Wire payment API-ийн албан ёсны TypeScript SDK.
+---
+
+[Wire](https://wire.mn)-ийн албан ёсны TypeScript SDK. Runtime dependency
+байхгүй; Node 18+ дээр ажиллана.
+
+- **Repository:** [github.com/buildry-wire/wire-node](https://github.com/buildry-wire/wire-node)
+- **Package:** [npmjs.com/package/@buildry-wire/wire](https://www.npmjs.com/package/@buildry-wire/wire)
+
+## Суулгах
+
+```bash
+npm install @buildry-wire/wire
+```
+
+## Эхлүүлж дуудлага хийх
+
+```ts
+import { Wire } from "@buildry-wire/wire";
+
+const wire = new Wire("sk_live_...");
+
+const pi = await wire.paymentIntents.create({
+  amount: 15000,                 // 15,000 ₮ — бүхэл төгрөг
+  currency: "MNT",
+  idempotencyKey: "order-1001",
+});
+console.log(pi.id, pi.status);
+```
+
+## Дэлгэрэнгүй
+
+- [Quickstart](/docs/quickstart)
+- [Webhooks](/docs/guides/webhooks) — `wire.webhooks.verify`
+- [API reference](/docs/api)

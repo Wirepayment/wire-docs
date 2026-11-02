@@ -1,0 +1,2128 @@
+openapi: 3.1.0
+info:
+  title: WirePayment Merchant API
+  version: "2026-05-09"
+  description: |
+    Unified payment gateway for Mongolia's payment operators, exposed to
+    merchants through one integration. Pay with whichever operators are
+    enabled on your account — no per-operator code.
+
+    ## Request format
+
+    - Base URL: `https://api.wire.mn`. Every endpoint lives under `/v1`.
+    - Authenticate every request with your project's secret key as a bearer
+      token: `Authorization: Bearer sk_live_…`.
+    - Request bodies are **JSON** — send `Content-Type: application/json`.
+      Form-encoded bodies (`curl -d key=value`) are not accepted and return
+      `400 invalid_json`.
+    - Every `POST` and `DELETE` must carry an `Idempotency-Key` header
+      (see the parameter description). `GET` requests never need one.
+    - Request bodies are capped at 1 MiB.
+
+    ## Conventions
+
+    - **Money:** every amount is an integer number of Mongolian tögrög (MNT).
+      There is no fractional part: `15000` means 15,000 ₮. The only currency
+      is `MNT`.
+    - **Time:** every timestamp is Unix seconds in UTC (e.g. `created`,
+      `expires_at`). Convert to Asia/Ulaanbaatar only for display.
+    - **IDs:** opaque strings with a type prefix — `pi_` PaymentIntent,
+      `ch_` Charge, `re_` Refund, `evt_` Event, `we_` webhook endpoint,
+      `opc_` operator connection, `cs_` checkout session.
+    - **Project scope:** an API key belongs to one project. Every read and
+      write is limited to that project's objects; another project's id reads
+      as `404 resource_missing`. Operator connections are the exception — they
+      belong to the business and are visible to all of its projects.
+    - **`livemode`:** objects carry a `livemode` flag; on this API it is
+      always `true` — every request moves real money.
+
+    ## Errors
+
+    Every error has the same envelope (see the `Error` schema):
+    `{"error": {"type", "code", "message", "param", "request_id"}}`.
+    Branch on `code`, never on `message`. Errors that can happen on any
+    endpoint:
+
+    | Status | `code` | When |
+    | --- | --- | --- |
+    | 400 | `invalid_json` | The body is not valid JSON (or was form-encoded). |
+    | 400 | `parameter_missing` (param `Idempotency-Key`) | A `POST`/`DELETE` without `Idempotency-Key`. |
+    | 400 | `parameter_invalid` (param `Idempotency-Key`) | The key is longer than 255 characters. |
+    | 400 | `parameter_invalid` (param `limit`) | `limit` is not an integer from 1 to 100. |
+    | 401 | `api_key_missing` / `api_key_invalid` | No bearer token, or an unknown/revoked key. |
+    | 401 | `test_mode_unavailable` | A test key (`sk_test_…`) was sent. Test keys are not accepted by this API; use a live secret key (`sk_live_…`). |
+    | 403 | `dan_verification_required` | The account owner has not completed citizen identity (DAN) verification. |
+    | 403 | `merchant_suspended` | The business is suspended and cannot accept payments. |
+    | 409 | `idempotency_key_in_use` | The `Idempotency-Key` was already used with a different body or path. |
+    | 409 | `idempotency_in_flight` | The first request with this key is still running; retry shortly. |
+    | 429 | `rate_limit` | Too many requests (default 100 requests/second per key). Back off and retry. |
+    | 429 | `auth_busy` | Authentication is temporarily busy; retry. |
+    | 500 | `internal` | Unexpected server error; retry with the same `Idempotency-Key`. |
+
+    Requests that start or advance a payment (every `POST` under
+    `/v1/payment_intents` and `/v1/checkout/sessions`) can additionally
+    return `403 connector_required` (no active operator connection switched
+    on for this project) or `403 settlement_account_required` (no bank
+    account chosen for that operator to pay into). Fix both in the dashboard.
+servers:
+  - url: https://api.wire.mn
+    description: Production
+  - url: http://localhost:8080
+    description: Local dev
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: PaymentIntents
+    description: |
+      A PaymentIntent is the amount you intend to collect for one order. It
+      moves through `requires_payment_method` → `requires_action` →
+      `processing` → `succeeded` (or `canceled`). Create one per order, then
+      either send the buyer to hosted checkout (CheckoutSessions) or confirm it
+      yourself and show the returned `next_action`.
+  - name: CheckoutSessions
+    description: |
+      A checkout session is a Wire-hosted payment page for one PaymentIntent.
+      Redirect the buyer to its `url`; the page lets the buyer pick an
+      operator, shows the QR code / bank-app links, and confirms the intent
+      itself.
+  - name: Charges
+    description: |
+      A Charge is one attempt to collect a PaymentIntent through one operator.
+      Wire creates it when the intent is confirmed; you only read charges.
+  - name: Refunds
+    description: Return all or part of a succeeded charge to the payer.
+  - name: Events
+    description: |
+      Every webhook Wire sends is also stored as an Event you can list and
+      re-read — useful for reconciliation or when your endpoint was down.
+  - name: WebhookEndpoints
+    description: |
+      Where Wire delivers events. Each project has exactly one webhook
+      endpoint. A new endpoint starts `pending` and must be verified from the
+      dashboard (a signed ping) before it receives events.
+  - name: OperatorConnections
+    description: |
+      The business's connections to payment operators. Most merchants connect
+      operators from the dashboard's Connectors page; these endpoints expose
+      the same records.
+  - name: Routing
+    description: Explain which operator automatic routing would choose.
+
+paths:
+  /v1/payment_intents:
+    post:
+      tags: [PaymentIntents]
+      summary: Create a PaymentIntent
+      description: |
+        Creates a PaymentIntent for the amount you want to collect. The new
+        intent is in status `requires_payment_method` — the normal "waiting
+        for the buyer" state, not an error.
+
+        **Which operators can be used.** By default (`automatic_operator:
+        true`, no `allowed_operators`) every operator switched on for the
+        key's project is eligible and Wire routes to the best one. Send
+        `allowed_operators` only to narrow that set.
+
+        **Next step.** Either create a checkout session for the intent (hosted
+        page — recommended) or call `/v1/payment_intents/{id}/confirm`
+        yourself. Do not do both. By default an intent expires **10 minutes**
+        after creation (`expires_at`); an expired, unpaid intent is canceled
+        automatically.
+
+        **Errors** (besides the common ones):
+        - `400 parameter_missing` (`amount`) — `amount` omitted.
+        - `400 amount_too_small` (`amount`) — `amount` is ≤ 0.
+        - `400 amount_too_large` (`amount`) — `amount` is above
+          1,000,000,000.
+        - `400 currency_unsupported` — `currency` is not `MNT`.
+        - `400 parameter_invalid` (`description`) — longer than 500 bytes.
+        - `400 operator_unknown` (param `allowed_operators[i]`, the message
+          names the offending value) — an `allowed_operators` entry is not an
+          operator id available on this API, or the list has more than 10
+          entries. Fix: omit `allowed_operators`, or use only the operator ids
+          shown on your dashboard's Connectors page.
+        - `400 metadata_invalid` — over 50 keys, an empty key, a key over
+          40 characters or a value over 500 characters.
+        - `403 connector_required` / `403 settlement_account_required`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaymentIntentCreate" }
+            examples:
+              minimal:
+                summary: Minimal — let Wire pick among your enabled operators
+                value:
+                  amount: 15000
+                  currency: MNT
+                  description: "Order #1001"
+              withMetadata:
+                summary: With your own order reference in metadata
+                value:
+                  amount: 15000
+                  currency: MNT
+                  description: "Order #1001"
+                  metadata:
+                    order_id: "1001"
+                    customer_id: "c_8842"
+      responses:
+        "200":
+          description: The new PaymentIntent, in status `requires_payment_method`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+              examples:
+                created:
+                  value:
+                    id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    object: payment_intent
+                    amount: 15000
+                    currency: MNT
+                    description: "Order #1001"
+                    status: requires_payment_method
+                    client_secret: cs_n2xk5q7mw3tz4vbr6jcy2gfa7m
+                    automatic_operator: true
+                    allowed_operators: []
+                    selected_operator: null
+                    next_action: null
+                    metadata:
+                      order_id: "1001"
+                    livemode: true
+                    created: 1791774000
+                    expires_at: 1791774600
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/IdempotencyConflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    get:
+      tags: [PaymentIntents]
+      summary: List PaymentIntents
+      description: |
+        Returns the project's PaymentIntents, newest first. Page with
+        `starting_after` = the last `id` of the previous page while
+        `has_more` is `true`.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: A page of PaymentIntents.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        description: The PaymentIntents on this page, newest first.
+                        items: { $ref: "#/components/schemas/PaymentIntent" }
+              examples:
+                page:
+                  value:
+                    object: list
+                    url: /v1/payment_intents
+                    has_more: false
+                    data:
+                      - id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                        object: payment_intent
+                        amount: 15000
+                        currency: MNT
+                        description: "Order #1001"
+                        status: succeeded
+                        client_secret: cs_n2xk5q7mw3tz4vbr6jcy2gfa7m
+                        automatic_operator: true
+                        allowed_operators: []
+                        selected_operator: op_example
+                        next_action: null
+                        metadata: { order_id: "1001" }
+                        livemode: true
+                        created: 1791774000
+                        expires_at: 1791774900
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/payment_intents/{id}:
+    get:
+      tags: [PaymentIntents]
+      summary: Retrieve a PaymentIntent
+      description: |
+        Returns one PaymentIntent. Poll this (or listen for the
+        `payment_intent.succeeded` webhook) to learn whether the buyer paid.
+        Always re-check `status` server-side before fulfilling an order.
+      parameters:
+        - $ref: "#/components/parameters/PaymentIntentID"
+      responses:
+        "200":
+          description: The PaymentIntent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+              examples:
+                awaitingPayment:
+                  summary: Confirmed, waiting for the buyer to scan / approve
+                  value:
+                    id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    object: payment_intent
+                    amount: 15000
+                    currency: MNT
+                    description: "Order #1001"
+                    status: requires_action
+                    client_secret: cs_n2xk5q7mw3tz4vbr6jcy2gfa7m
+                    automatic_operator: true
+                    allowed_operators: []
+                    selected_operator: op_example
+                    next_action:
+                      type: qr
+                      qr:
+                        text: "0002010102121531..."
+                        deeplinks:
+                          - name: Example bank
+                            link: "examplebank://pay?qr=0002010102121531..."
+                    metadata: { order_id: "1001" }
+                    livemode: true
+                    created: 1791774000
+                    expires_at: 1791774900
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/payment_intents/{id}/confirm:
+    post:
+      tags: [PaymentIntents]
+      summary: Confirm a PaymentIntent (create the operator invoice)
+      description: |
+        Chooses an operator, creates the payment (invoice) at that operator,
+        records a pending Charge and moves the intent from
+        `requires_payment_method` to `requires_action`. Show the buyer the
+        returned `next_action` (QR code, bank-app links or a redirect).
+        Payment completes asynchronously: the intent becomes `succeeded` and
+        a `payment_intent.succeeded` event is sent.
+
+        **Skip this call when you use hosted checkout** — the hosted page
+        confirms the intent itself.
+
+        **Operator choice**, in order: the `operator` you send → automatic
+        routing among the project's enabled operators (when
+        `automatic_operator` is true) → the first entry of
+        `allowed_operators`. The operator must have an active connection and
+        be switched on for this project.
+
+        **Errors** (besides the common ones):
+        - `404 resource_missing` — no such intent in this project.
+        - `400 payment_intent_unexpected_state` — the intent is not in
+          `requires_payment_method` (already confirmed, paid, canceled, or a
+          concurrent confirm won). Re-read the intent.
+        - `400 operator_not_allowed` (`operator`) — the operator is not in
+          `allowed_operators`; no eligible operator was found; the operator
+          has no active connection or is not switched on for this project.
+        - `400 operator_unknown` (`operator`) — the operator id is not known
+          to this API.
+        - `402` (`type: payment_method_error`) — the operator declined; `code`
+          is the operator's reason.
+        - `424` (`type: operator_error`) — the operator failed or timed out
+          (`operator_timeout`). Safe to retry with the same `Idempotency-Key`.
+        - `403 connector_required` / `403 settlement_account_required`.
+      parameters:
+        - $ref: "#/components/parameters/PaymentIntentID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaymentIntentConfirm" }
+            examples:
+              automatic:
+                summary: Empty body — let routing choose
+                value: {}
+              explicit:
+                summary: Pick an operator and set a return URL
+                value:
+                  operator: op_example
+                  return_url: https://yourshop.mn/orders/1001
+      responses:
+        "200":
+          description: The PaymentIntent, now `requires_action` with a `next_action`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+              examples:
+                confirmed:
+                  value:
+                    id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    object: payment_intent
+                    amount: 15000
+                    currency: MNT
+                    description: "Order #1001"
+                    status: requires_action
+                    client_secret: cs_n2xk5q7mw3tz4vbr6jcy2gfa7m
+                    automatic_operator: true
+                    allowed_operators: []
+                    selected_operator: op_example
+                    next_action:
+                      type: qr
+                      qr:
+                        text: "0002010102121531..."
+                        image_url: "https://example.invalid/qr.png"
+                    metadata: { order_id: "1001" }
+                    livemode: true
+                    created: 1791774000
+                    expires_at: 1791774900
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "402": { $ref: "#/components/responses/PaymentMethodError" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/IdempotencyConflict" }
+        "424": { $ref: "#/components/responses/OperatorError" }
+
+  /v1/payment_intents/{id}/cancel:
+    post:
+      tags: [PaymentIntents]
+      summary: Cancel a PaymentIntent
+      description: |
+        Cancels an intent that has not been paid. Allowed from
+        `requires_payment_method`, `requires_action`, `requires_capture` and
+        `processing`. If an operator invoice was already created, Wire voids
+        it where the operator supports that. Sends a
+        `payment_intent.canceled` event.
+
+        Idempotent: canceling an intent that is already `canceled` returns
+        it unchanged and sends no second event.
+
+        **Errors:** `400 payment_intent_unexpected_state` — the intent already
+        `succeeded`, or its status changed while canceling (re-read it);
+        `404 resource_missing`. Because this is a `POST` under
+        `/v1/payment_intents`, it can also return `403 connector_required` /
+        `403 settlement_account_required`.
+      parameters:
+        - $ref: "#/components/parameters/PaymentIntentID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: The canceled PaymentIntent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+              examples:
+                canceled:
+                  value:
+                    id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    object: payment_intent
+                    amount: 15000
+                    currency: MNT
+                    description: "Order #1001"
+                    status: canceled
+                    client_secret: cs_n2xk5q7mw3tz4vbr6jcy2gfa7m
+                    automatic_operator: true
+                    allowed_operators: []
+                    selected_operator: null
+                    next_action: null
+                    metadata: { order_id: "1001" }
+                    livemode: true
+                    created: 1791774000
+                    expires_at: 1791774600
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/IdempotencyConflict" }
+
+  /v1/checkout/sessions:
+    post:
+      tags: [CheckoutSessions]
+      summary: Create a checkout session (hosted payment page)
+      description: |
+        Opens a Wire-hosted payment page for a PaymentIntent and returns its
+        `url`. Redirect the buyer there. The page lists the operators the
+        buyer can pay with, confirms the intent, shows the QR code / bank-app
+        links, and redirects to `success_url` / `cancel_url` when done.
+
+        Create the session right after creating the intent: the intent must
+        still be in `requires_payment_method` (not confirmed, not canceled,
+        not expired). Do not call `/confirm` yourself for this intent.
+
+        **Errors** (besides the common ones):
+        - `400 invalid_request_error` (`payment_intent`) — `payment_intent`
+          omitted.
+        - `404 resource_missing` — no such PaymentIntent in this project.
+        - `400 payment_intent_unexpected_state` (`payment_intent`) — the
+          intent is not awaiting payment.
+        - `400 checkout_url_invalid` (`success_url`) — `success_url` or
+          `cancel_url` is not an absolute `http(s)` URL.
+        - `403 connector_required` / `403 settlement_account_required`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckoutSessionCreate" }
+            examples:
+              basic:
+                value:
+                  payment_intent: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                  success_url: https://yourshop.mn/orders/1001
+                  cancel_url: https://yourshop.mn/cart
+      responses:
+        "200":
+          description: The checkout session. Redirect the buyer to `url`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutSession" }
+              examples:
+                created:
+                  value:
+                    id: cs_w6qz3k2mx5tn4vbr7cyj2hpa5k
+                    object: checkout_session
+                    payment_intent: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    status: open
+                    url: https://pay.wire.mn/c/cs_w6qz3k2mx5tn4vbr7cyj2hpa5k
+                    success_url: https://yourshop.mn/orders/1001
+                    cancel_url: https://yourshop.mn/cart
+                    allowed_operators: []
+                    created: 1791774005
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/IdempotencyConflict" }
+
+  /v1/checkout/sessions/{id}:
+    get:
+      tags: [CheckoutSessions]
+      summary: Retrieve a checkout session
+      description: |
+        Returns one checkout session. For the payment result read the
+        PaymentIntent (or use webhooks) — the session only tracks the page.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Checkout session id (`cs_…`).
+          schema: { type: string, examples: [cs_w6qz3k2mx5tn4vbr7cyj2hpa5k] }
+      responses:
+        "200":
+          description: The checkout session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutSession" }
+              examples:
+                complete:
+                  value:
+                    id: cs_w6qz3k2mx5tn4vbr7cyj2hpa5k
+                    object: checkout_session
+                    payment_intent: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    status: complete
+                    url: https://pay.wire.mn/c/cs_w6qz3k2mx5tn4vbr7cyj2hpa5k
+                    success_url: https://yourshop.mn/orders/1001
+                    cancel_url: https://yourshop.mn/cart
+                    allowed_operators: []
+                    created: 1791774005
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/charges:
+    get:
+      tags: [Charges]
+      summary: List Charges
+      description: |
+        Returns the project's charges, newest first. Filter to one intent
+        with `payment_intent`.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - name: payment_intent
+          in: query
+          schema: { type: string, examples: [pi_k3vq7m2xw5nbt4rj6yhc2dpa7e] }
+          description: Only return charges of this PaymentIntent (`pi_…`).
+      responses:
+        "200":
+          description: A page of Charges.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        description: The Charges on this page, newest first.
+                        items: { $ref: "#/components/schemas/Charge" }
+              examples:
+                page:
+                  value:
+                    object: list
+                    url: /v1/charges
+                    has_more: false
+                    data:
+                      - id: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+                        object: charge
+                        payment_intent: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                        operator: op_example
+                        operator_charge_id: "INV-20261012-000123"
+                        status: succeeded
+                        amount: 15000
+                        fee: 0
+                        amount_refunded: 0
+                        failure_code: null
+                        failure_message: null
+                        livemode: true
+                        created: 1791774010
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/charges/{id}:
+    get:
+      tags: [Charges]
+      summary: Retrieve a Charge
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Charge id (`ch_…`).
+          schema: { type: string, examples: [ch_m4tz2q7wn5kc3vbx6ryj2hfa5d] }
+      responses:
+        "200":
+          description: The Charge.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Charge" }
+              examples:
+                succeeded:
+                  value:
+                    id: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+                    object: charge
+                    payment_intent: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    operator: op_example
+                    operator_charge_id: "INV-20261012-000123"
+                    status: succeeded
+                    amount: 15000
+                    fee: 0
+                    amount_refunded: 5000
+                    failure_code: null
+                    failure_message: null
+                    livemode: true
+                    created: 1791774010
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/refunds:
+    post:
+      tags: [Refunds]
+      summary: Refund a charge
+      description: |
+        Refunds a `succeeded` charge, fully (omit `amount`) or partially.
+        The amount is reserved on the charge immediately (it shows in the
+        charge's `amount_refunded`), so concurrent refunds can never exceed
+        the charge.
+
+        The resulting `status` depends on the operator:
+        `succeeded` — refunded through the operator (a `charge.refunded`
+        event is sent); `manual_required` — the operator does not support
+        refunds through the API, so the refund is recorded and completed by
+        Wire operations outside the API; `pending` — the operator accepted it
+        but has not finished; `failed` — the operator refused and the
+        reserved amount was released.
+
+        **Errors** (besides the common ones):
+        - `400 parameter_missing` (`charge`) — `charge` omitted.
+        - `400 parameter_invalid` (`amount`) — `amount` is ≤ 0.
+        - `404 resource_missing` — no such charge in this project.
+        - `400 charge_not_refundable` (`charge`) — the charge is not
+          `succeeded`, or is already fully refunded.
+        - `400 amount_invalid` (`amount`) — more than the remaining
+          refundable amount.
+        - `400 reason_too_long` (`reason`) — over 500 bytes.
+        - `424 refund_failed` — the operator could not process the refund.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefundCreate" }
+            examples:
+              full:
+                summary: Full refund of what is left on the charge
+                value:
+                  charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+              partial:
+                summary: Partial refund with a reason
+                value:
+                  charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+                  amount: 5000
+                  reason: "Item out of stock"
+      responses:
+        "200":
+          description: The Refund.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Refund" }
+              examples:
+                created:
+                  value:
+                    id: re_p2wq5t7xk3mz4vnb6cyr2jga3f
+                    object: refund
+                    charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+                    amount: 5000
+                    reason: "Item out of stock"
+                    status: manual_required
+                    operator_refund_id: null
+                    livemode: true
+                    created: 1791777600
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/IdempotencyConflict" }
+        "424": { $ref: "#/components/responses/OperatorError" }
+    get:
+      tags: [Refunds]
+      summary: List a charge's refunds
+      description: |
+        Returns every refund of one charge. `charge` is required; this list
+        is not paginated (`has_more` is always `false`).
+        `400 parameter_missing` (`charge`) when `charge` is omitted.
+      parameters:
+        - name: charge
+          in: query
+          required: true
+          description: The charge whose refunds to list (`ch_…`).
+          schema: { type: string, examples: [ch_m4tz2q7wn5kc3vbx6ryj2hfa5d] }
+      responses:
+        "200":
+          description: The charge's refunds.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, has_more, data]
+                properties:
+                  object: { type: string, const: list, description: Always `list`. }
+                  has_more:
+                    type: boolean
+                    description: Always `false` — every refund of the charge is returned.
+                  data:
+                    type: array
+                    description: The refunds.
+                    items: { $ref: "#/components/schemas/Refund" }
+              examples:
+                list:
+                  value:
+                    object: list
+                    has_more: false
+                    data:
+                      - id: re_p2wq5t7xk3mz4vnb6cyr2jga3f
+                        object: refund
+                        charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+                        amount: 5000
+                        reason: "Item out of stock"
+                        status: succeeded
+                        operator_refund_id: "RF-778812"
+                        livemode: true
+                        created: 1791777600
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/refunds/{id}:
+    get:
+      tags: [Refunds]
+      summary: Retrieve a Refund
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Refund id (`re_…`).
+          schema: { type: string, examples: [re_p2wq5t7xk3mz4vnb6cyr2jga3f] }
+      responses:
+        "200":
+          description: The Refund.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Refund" }
+              examples:
+                refund:
+                  value:
+                    id: re_p2wq5t7xk3mz4vnb6cyr2jga3f
+                    object: refund
+                    charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+                    amount: 5000
+                    reason: "Item out of stock"
+                    status: succeeded
+                    operator_refund_id: "RF-778812"
+                    livemode: true
+                    created: 1791777600
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/events:
+    get:
+      tags: [Events]
+      summary: List Events
+      description: |
+        Returns the project's events (the same objects delivered to your
+        webhook endpoint), newest first. Use it to catch up after downtime.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum:
+              [
+                payment_intent.succeeded,
+                payment_intent.payment_failed,
+                payment_intent.canceled,
+                charge.refunded,
+              ]
+          description: Only return events of this type.
+      responses:
+        "200":
+          description: A page of Events.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        description: The Events on this page, newest first.
+                        items: { $ref: "#/components/schemas/Event" }
+              examples:
+                page:
+                  value:
+                    object: list
+                    url: /v1/events
+                    has_more: false
+                    data:
+                      - id: evt_b7nx3k2qw5mv4tzc6jry2pha4g
+                        object: event
+                        type: payment_intent.succeeded
+                        api_version: "2026-05-09"
+                        data:
+                          id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                          object: payment_intent
+                          status: succeeded
+                          amount: 15000
+                          currency: MNT
+                          charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+                        livemode: true
+                        created: 1791774042
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/events/{id}:
+    get:
+      tags: [Events]
+      summary: Retrieve an Event
+      description: |
+        Returns one event. A safe way to double-check a webhook: fetch the
+        event by the `id` you received.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Event id (`evt_…`).
+          schema: { type: string, examples: [evt_b7nx3k2qw5mv4tzc6jry2pha4g] }
+      responses:
+        "200":
+          description: The Event.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+              examples:
+                succeeded:
+                  value:
+                    id: evt_b7nx3k2qw5mv4tzc6jry2pha4g
+                    object: event
+                    type: payment_intent.succeeded
+                    api_version: "2026-05-09"
+                    data:
+                      id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                      object: payment_intent
+                      status: succeeded
+                      amount: 15000
+                      currency: MNT
+                      charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+                    livemode: true
+                    created: 1791774042
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/webhook_endpoints:
+    post:
+      tags: [WebhookEndpoints]
+      summary: Create a webhook endpoint
+      description: |
+        Registers the project's webhook endpoint. The response contains the
+        signing `secret` (`whsec_…`) — **shown only once**; store it.
+
+        The endpoint starts in status `pending` and receives nothing until it
+        is verified from the dashboard: Wire sends a signed
+        `endpoint.verification` ping and your URL must answer `2xx`.
+
+        **Errors** (besides the common ones):
+        - `409 webhook_endpoint_exists` — the project already has its one
+          endpoint; update it instead.
+        - `400 webhook_url_invalid` (`url`) — not an absolute `http(s)` URL,
+          or it points at `localhost` / a private, loopback or link-local IP.
+        - `400 enabled_events_invalid` (`enabled_events`) — an unknown event
+          name, or more than 20 entries.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookEndpointCreate" }
+            examples:
+              allEvents:
+                summary: Receive every event
+                value:
+                  url: https://yourshop.mn/webhooks/wire
+              onlySucceeded:
+                summary: Only successful payments
+                value:
+                  url: https://yourshop.mn/webhooks/wire
+                  enabled_events: [payment_intent.succeeded]
+      responses:
+        "200":
+          description: The endpoint, including the signing secret (returned only here).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpointWithSecret" }
+              examples:
+                created:
+                  value:
+                    id: we_t5kz2m7qx3wn4vbc6rjy2dfa6h
+                    object: webhook_endpoint
+                    url: https://yourshop.mn/webhooks/wire
+                    enabled_events: ["*"]
+                    status: pending
+                    secret: whsec_REPLACE_WITH_YOUR_SECRET
+                    livemode: true
+                    created: 1791770400
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      tags: [WebhookEndpoints]
+      summary: List webhook endpoints
+      description: Returns the project's webhook endpoint (at most one). The secret is never included.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: A page of webhook endpoints.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        description: The webhook endpoints.
+                        items: { $ref: "#/components/schemas/WebhookEndpoint" }
+              examples:
+                page:
+                  value:
+                    object: list
+                    url: /v1/webhook_endpoints
+                    has_more: false
+                    data:
+                      - id: we_t5kz2m7qx3wn4vbc6rjy2dfa6h
+                        object: webhook_endpoint
+                        url: https://yourshop.mn/webhooks/wire
+                        enabled_events: ["*"]
+                        status: enabled
+                        livemode: true
+                        created: 1791770400
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/webhook_endpoints/{id}:
+    get:
+      tags: [WebhookEndpoints]
+      summary: Retrieve a webhook endpoint
+      parameters:
+        - $ref: "#/components/parameters/WebhookEndpointID"
+      responses:
+        "200":
+          description: The endpoint (secret omitted).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpoint" }
+              examples:
+                endpoint:
+                  value:
+                    id: we_t5kz2m7qx3wn4vbc6rjy2dfa6h
+                    object: webhook_endpoint
+                    url: https://yourshop.mn/webhooks/wire
+                    enabled_events: ["*"]
+                    status: enabled
+                    livemode: true
+                    created: 1791770400
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [WebhookEndpoints]
+      summary: Update a webhook endpoint
+      description: |
+        Changes the URL, the subscribed events, or pauses/resumes delivery.
+        Only the fields you send change.
+
+        - `url` — on an endpoint that was never verified the URL is replaced
+          at once. On a verified endpoint the new URL is **staged**: events
+          keep going to the old URL until the new one passes verification
+          from the dashboard.
+        - `enabled_events` — replaces the whole list.
+        - `status` — `disabled` pauses delivery, `enabled` resumes it. Setting
+          `enabled` does not skip verification: an unverified endpoint still
+          receives nothing.
+
+        **Errors:** `400 webhook_url_invalid`, `400 enabled_events_invalid`,
+        `400 parameter_invalid` (`status` not `enabled`/`disabled`),
+        `404 resource_missing`.
+      parameters:
+        - $ref: "#/components/parameters/WebhookEndpointID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookEndpointUpdate" }
+            examples:
+              pause:
+                summary: Pause delivery
+                value:
+                  status: disabled
+              events:
+                summary: Change subscribed events
+                value:
+                  enabled_events: [payment_intent.succeeded, charge.refunded]
+      responses:
+        "200":
+          description: The updated endpoint.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpoint" }
+              examples:
+                paused:
+                  value:
+                    id: we_t5kz2m7qx3wn4vbc6rjy2dfa6h
+                    object: webhook_endpoint
+                    url: https://yourshop.mn/webhooks/wire
+                    enabled_events: ["*"]
+                    status: disabled
+                    livemode: true
+                    created: 1791770400
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [WebhookEndpoints]
+      summary: Delete a webhook endpoint
+      description: Removes the endpoint; the project can then create a new one.
+      parameters:
+        - $ref: "#/components/parameters/WebhookEndpointID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Deletion acknowledgement.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deleted" }
+              examples:
+                deleted:
+                  value:
+                    id: we_t5kz2m7qx3wn4vbc6rjy2dfa6h
+                    object: webhook_endpoint
+                    deleted: true
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/operator_connections:
+    post:
+      tags: [OperatorConnections]
+      summary: Connect an operator with your own credentials
+      description: |
+        Stores credentials for an operator under your business. Credentials
+        are encrypted at rest and never returned. A connection created here
+        starts `inactive`; run `/test` to activate it. To take payments the
+        operator must also be switched on for the project and have a
+        settlement bank account (dashboard).
+
+        Only `mode: "byo"` can be created here; connections Wire provisions
+        for you come from the dashboard's connector application.
+
+        **Errors:** `400 operator_unknown` (`operator`),
+        `400 operator_connection_exists` (`operator`) — the business already
+        has a connection for this operator,
+        `400 operator_connection_invalid` (`mode`) — any mode other than
+        `byo`,
+        `400 operator_connection_invalid` (`credentials`) — empty
+        `credentials` or an invalid `mode`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperatorConnectionCreate" }
+            examples:
+              byo:
+                value:
+                  operator: op_example
+                  credentials:
+                    username: "your-operator-username"
+                    password: "your-operator-password"
+      responses:
+        "200":
+          description: The connection (credentials never returned).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperatorConnection" }
+              examples:
+                created:
+                  value:
+                    id: opc_r3mq7z2kw5xt4nvb6cyj2ega2c
+                    object: operator_connection
+                    operator: op_example
+                    mode: byo
+                    status: inactive
+                    capabilities: [refund.full]
+                    created: 1791770000
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    get:
+      tags: [OperatorConnections]
+      summary: List operator connections
+      description: Returns the business's operator connections (shared by all its projects), newest first.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: A page of operator connections.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        description: The operator connections.
+                        items: { $ref: "#/components/schemas/OperatorConnection" }
+              examples:
+                page:
+                  value:
+                    object: list
+                    url: /v1/operator_connections
+                    has_more: false
+                    data:
+                      - id: opc_r3mq7z2kw5xt4nvb6cyj2ega2c
+                        object: operator_connection
+                        operator: op_example
+                        mode: byo
+                        status: active
+                        capabilities: [refund.full]
+                        created: 1791770000
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/operator_connections/{id}:
+    get:
+      tags: [OperatorConnections]
+      summary: Retrieve an operator connection
+      parameters:
+        - $ref: "#/components/parameters/OperatorConnectionID"
+      responses:
+        "200":
+          description: The connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperatorConnection" }
+              examples:
+                connection:
+                  value:
+                    id: opc_r3mq7z2kw5xt4nvb6cyj2ega2c
+                    object: operator_connection
+                    operator: op_example
+                    mode: byo
+                    status: active
+                    capabilities: [refund.full]
+                    created: 1791770000
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [OperatorConnections]
+      summary: Delete an operator connection
+      parameters:
+        - $ref: "#/components/parameters/OperatorConnectionID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Deletion acknowledgement.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deleted" }
+              examples:
+                deleted:
+                  value:
+                    id: opc_r3mq7z2kw5xt4nvb6cyj2ega2c
+                    object: operator_connection
+                    deleted: true
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/operator_connections/{id}/test:
+    post:
+      tags: [OperatorConnections]
+      summary: Test an operator connection
+      description: |
+        Checks that the operator is available and the stored credentials can
+        be read. On success (`status: ok`) a `byo` connection becomes
+        `active`; a connection Wire provisioned for you (`reseller`) is only
+        checked, never switched on here — it is activated by concluding the
+        connector agreement in the dashboard. If the operator cannot be
+        reached the result is `status: unreachable` and the connection is
+        left unchanged.
+      parameters:
+        - $ref: "#/components/parameters/OperatorConnectionID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Test result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperatorConnectionTest" }
+              examples:
+                ok:
+                  value:
+                    object: operator_connection_test
+                    operator: op_example
+                    status: ok
+                    capabilities: [refund.full]
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/routing/preview:
+    get:
+      tags: [Routing]
+      summary: Preview automatic operator routing
+      description: |
+        Dry run of automatic routing: returns which operator Wire would pick
+        for these parameters and why, without creating anything. Candidates
+        are the business's active operator connections that are switched on
+        for the key's project.
+
+        **Errors:** `400 invalid_request_error` (`amount`) — `amount` missing
+        or not a positive integer; `400 operator_unavailable` — no operator
+        is eligible.
+      parameters:
+        - name: amount
+          in: query
+          required: true
+          description: Amount in MNT (whole tögrög).
+          schema: { type: integer, minimum: 1, examples: [15000] }
+        - name: operators
+          in: query
+          required: false
+          description: Comma-separated operator ids to restrict the choice to (same meaning as `allowed_operators`).
+          schema: { type: string, examples: ["op_example,op_other"] }
+        - name: loan
+          in: query
+          required: false
+          description: "`true` to consider only operators that support a loan / instalment flow."
+          schema: { type: string, enum: ["true", "false"] }
+      responses:
+        "200":
+          description: The routing decision.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoutingPreview" }
+              examples:
+                preview:
+                  value:
+                    object: routing_preview
+                    selected: op_example
+                    reason: "selected op_example: score 0.912 (success 0.98, latency 0.80, priority 1.00)"
+                    fallback_chain: [op_example, op_other]
+                    scored:
+                      - operator: op_example
+                        score: { success: 0.98, latency: 0.8, priority: 1, total: 0.912 }
+                        fee_minor: 0
+                      - operator: op_other
+                        score: { success: 0.95, latency: 0.7, priority: 0.5, total: 0.81 }
+                        fee_minor: 0
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+webhooks:
+  payment_intent.succeeded:
+    post:
+      summary: payment_intent.succeeded
+      description: |
+        The buyer paid; the PaymentIntent is `succeeded`. Fulfil the order
+        here (after verifying the signature).
+
+        **Delivery:** `POST` to your endpoint's URL with
+        `Content-Type: application/json` and a `WirePayment-Signature` header
+        `t=<unix seconds>,v1=<hex HMAC-SHA256>`. The HMAC is computed with
+        your endpoint secret (`whsec_…`) over the string `<t>.<raw body>`.
+        Compare in constant time and reject old timestamps (e.g. older than
+        300 seconds). Answer `2xx` quickly. A `5xx`, `408`, `429` or
+        network error is retried; any other `4xx` drops the delivery. The
+        same event can arrive more than once — deduplicate on `id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookEvent" }
+            examples:
+              succeeded:
+                value:
+                  id: evt_b7nx3k2qw5mv4tzc6jry2pha4g
+                  object: event
+                  type: payment_intent.succeeded
+                  created: 1791774042
+                  data:
+                    id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    object: payment_intent
+                    status: succeeded
+                    amount: 15000
+                    currency: MNT
+                    charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+      responses:
+        "200": { description: "Return any 2xx to acknowledge." }
+  payment_intent.payment_failed:
+    post:
+      summary: payment_intent.payment_failed
+      description: |
+        The operator reported the payment attempt as failed. `data` has the
+        same shape as `payment_intent.succeeded` (with the failed `charge`);
+        read the Charge for `failure_code` / `failure_message`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookEvent" }
+            examples:
+              failed:
+                value:
+                  id: evt_c2mx5k7qw3nv4tzb6jry2pha3h
+                  object: event
+                  type: payment_intent.payment_failed
+                  created: 1791774100
+                  data:
+                    id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    object: payment_intent
+                    status: requires_payment_method
+                    amount: 15000
+                    currency: MNT
+                    charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+      responses:
+        "200": { description: "Return any 2xx to acknowledge." }
+  payment_intent.canceled:
+    post:
+      summary: payment_intent.canceled
+      description: |
+        The PaymentIntent was canceled (by you, or automatically after it
+        expired unpaid). `data` has no `charge` field.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookEvent" }
+            examples:
+              canceled:
+                value:
+                  id: evt_d3nx7k2qw5mv4tzc6jry2pha5j
+                  object: event
+                  type: payment_intent.canceled
+                  created: 1791774600
+                  data:
+                    id: pi_k3vq7m2xw5nbt4rj6yhc2dpa7e
+                    object: payment_intent
+                    status: canceled
+                    amount: 15000
+                    currency: MNT
+      responses:
+        "200": { description: "Return any 2xx to acknowledge." }
+  charge.refunded:
+    post:
+      summary: charge.refunded
+      description: |
+        A refund completed through the operator. `data` describes the refund;
+        `refunded_total` is the charge's total refunded amount so far.
+        Refunds with status `manual_required` do not send this event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookEvent" }
+            examples:
+              refunded:
+                value:
+                  id: evt_f4px2k7qw5mv3tzc6jry2pha6k
+                  object: event
+                  type: charge.refunded
+                  created: 1791777610
+                  data:
+                    id: re_p2wq5t7xk3mz4vnb6cyr2jga3f
+                    object: refund
+                    charge: ch_m4tz2q7wn5kc3vbx6ryj2hfa5d
+                    amount: 5000
+                    status: succeeded
+                    refunded_total: 5000
+      responses:
+        "200": { description: "Return any 2xx to acknowledge." }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Secret API key as a bearer token: `Authorization: Bearer sk_live_…`.
+        Test keys (`sk_test_…`) are refused with `401 test_mode_unavailable`.
+        Keys are issued per project in the dashboard. Never expose a secret
+        key in browser or mobile code.
+
+  parameters:
+    PaymentIntentID:
+      name: id
+      in: path
+      required: true
+      description: PaymentIntent id (`pi_…`).
+      schema: { type: string, examples: [pi_k3vq7m2xw5nbt4rj6yhc2dpa7e] }
+    WebhookEndpointID:
+      name: id
+      in: path
+      required: true
+      description: Webhook endpoint id (`we_…`).
+      schema: { type: string, examples: [we_t5kz2m7qx3wn4vbc6rjy2dfa6h] }
+    OperatorConnectionID:
+      name: id
+      in: path
+      required: true
+      description: Operator connection id (`opc_…`).
+      schema: { type: string, examples: [opc_r3mq7z2kw5xt4nvb6cyj2ega2c] }
+    Limit:
+      name: limit
+      in: query
+      description: Page size, 1–100. Default 10. Anything else returns `400 parameter_invalid`.
+      schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+    StartingAfter:
+      name: starting_after
+      in: query
+      schema: { type: string, examples: [pi_k3vq7m2xw5nbt4rj6yhc2dpa7e] }
+      description: Cursor — the `id` of the last object on the previous page; returns the objects after it.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, maxLength: 255, examples: [order-1001-create] }
+      description: >-
+        Required on every POST and DELETE (missing → 400 `parameter_missing`;
+        longer than 255 characters → 400 `parameter_invalid`). Use one stable
+        key per logical operation, e.g. your order id plus the action. A retry
+        with the same key and the same body returns the recorded response
+        (header `Idempotent-Replayed: true`) instead of acting twice. The
+        same key with a different body or path → 409 `idempotency_key_in_use`.
+        While the first request is still running, a duplicate gets 409
+        `idempotency_in_flight` — wait a moment and retry. Successful (2xx) and
+        declined (402) responses are recorded for 48 hours; other errors are
+        not, so a retry after fixing a 400 runs normally. Keys are scoped to
+        the API key's project.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid API key (`api_key_missing`, `api_key_invalid`), or a test key (`test_mode_unavailable`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            testKey:
+              value:
+                error:
+                  type: api_error
+                  code: test_mode_unavailable
+                  message: test keys are not accepted by this API; use a live secret key
+                  request_id: req_8f3a1c9e5b7d2f4a6c0e9b1d
+            invalidKey:
+              value:
+                error:
+                  type: api_error
+                  code: api_key_invalid
+                  message: invalid api key
+                  request_id: req_8f3a1c9e5b7d2f4a6c0e9b1d
+    Forbidden:
+      description: |
+        The account cannot take payments yet: `dan_verification_required`,
+        `merchant_suspended`, `connector_required` or
+        `settlement_account_required`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            connectorRequired:
+              value:
+                error:
+                  type: api_error
+                  code: connector_required
+                  message: connect a payment operator before creating payments — see the Connectors page in your dashboard
+                  request_id: req_8f3a1c9e5b7d2f4a6c0e9b1d
+    InvalidRequest:
+      description: Invalid request — see the operation description for the possible `code` values.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            missingAmount:
+              value:
+                error:
+                  type: invalid_request_error
+                  code: parameter_missing
+                  message: amount is required
+                  param: amount
+                  request_id: req_8f3a1c9e5b7d2f4a6c0e9b1d
+    NotFound:
+      description: No such object in this project (`resource_missing`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            missing:
+              value:
+                error:
+                  type: invalid_request_error
+                  code: resource_missing
+                  message: no such payment_intent
+                  request_id: req_8f3a1c9e5b7d2f4a6c0e9b1d
+    Conflict:
+      description:
+        Conflict with existing state — code `webhook_endpoint_exists` means the
+        project already has its one webhook endpoint (update it instead of
+        creating a second one). Idempotency conflicts are also 409.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            exists:
+              value:
+                error:
+                  type: invalid_request_error
+                  code: webhook_endpoint_exists
+                  message: The project already has a webhook endpoint. Update the existing one instead.
+                  request_id: req_8f3a1c9e5b7d2f4a6c0e9b1d
+    IdempotencyConflict:
+      description: |
+        `idempotency_key_in_use` (key reused with a different body) or
+        `idempotency_in_flight` (the first request with this key is still
+        running — retry shortly to get its recorded result).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            inFlight:
+              value:
+                error:
+                  type: idempotency_error
+                  code: idempotency_in_flight
+                  message: A request with this Idempotency-Key is still being processed; retry shortly
+                  request_id: req_8f3a1c9e5b7d2f4a6c0e9b1d
+    RateLimited:
+      description: Too many requests (`rate_limit`) or authentication busy (`auth_busy`). Back off and retry.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    PaymentMethodError:
+      description: "The operator declined the payment (`type: payment_method_error`; `code` is the operator's reason)."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            declined:
+              value:
+                error:
+                  type: payment_method_error
+                  code: amount_too_small
+                  message: amount below the operator's minimum
+                  request_id: req_8f3a1c9e5b7d2f4a6c0e9b1d
+    OperatorError:
+      description: "Operator-side failure or timeout (`type: operator_error`, e.g. `operator_timeout`, `refund_failed`). Retry with the same Idempotency-Key."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            timeout:
+              value:
+                error:
+                  type: operator_error
+                  code: operator_timeout
+                  message: the operator did not respond in time; please retry
+                  request_id: req_8f3a1c9e5b7d2f4a6c0e9b1d
+
+  schemas:
+    ListBase:
+      type: object
+      description: Envelope of every paginated list.
+      properties:
+        object: { type: string, const: list, description: Always `list`. }
+        url:
+          type: string
+          description: The path this list was read from.
+          examples: [/v1/payment_intents]
+        has_more:
+          type: boolean
+          description: "`true` when more objects exist after this page — request again with `starting_after` = the last `id`."
+      required: [object, url, has_more, data]
+
+    Deleted:
+      type: object
+      description: Returned by delete endpoints.
+      properties:
+        id: { type: string, description: "Id of the deleted object." }
+        object: { type: string, description: "Type of the deleted object (`webhook_endpoint`, `operator_connection`)." }
+        deleted: { type: boolean, const: true, description: Always `true`. }
+
+    Error:
+      type: object
+      description: Error envelope returned with every non-2xx status.
+      properties:
+        error:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [invalid_request_error, api_error, idempotency_error, payment_method_error, operator_error]
+              description: |
+                Error category. `invalid_request_error` — fix the request
+                (400/404/409); `api_error` — auth, permission, rate limit or
+                server error (401/403/429/500); `idempotency_error` — key
+                conflict (409); `payment_method_error` — the operator declined
+                (402); `operator_error` — the operator failed or timed out (424).
+            code:
+              type: string
+              description: Stable machine-readable code — branch on this.
+              examples: [parameter_missing]
+            message:
+              type: string
+              description: Human-readable explanation. Wording may change; never branch on it.
+            param:
+              type: string
+              description: The request field at fault, when there is one.
+              examples: [amount]
+            request_id:
+              type: string
+              description: Id of this request (`req_` + 24 hex). Quote it to support.
+              examples: [req_8f3a1c9e5b7d2f4a6c0e9b1d]
+            doc_url: { type: string, description: "Link to documentation about this error, when available." }
+            operator_decline_code: { type: string, description: "The operator's own decline code, when it gave one." }
+          required: [type, message]
+
+    PaymentIntentCreate:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+          maximum: 1000000000
+          description: Amount to collect in MNT — whole tögrög, no fractional part (`15000` = 15,000 ₮). 1 to 1,000,000,000. An operator may enforce its own minimum.
+          examples: [15000]
+        currency:
+          type: string
+          enum: [MNT]
+          default: MNT
+          description: Currency. Only `MNT` is supported; omit it or send `MNT`.
+        description:
+          type: string
+          maxLength: 500
+          description: Transaction description shown to the payer (e.g. on the invoice / bank statement). Optional; at most 500 bytes (UTF-8 — Cyrillic letters take 2 bytes each).
+          examples: ["Order #1001"]
+        automatic_operator:
+          type: boolean
+          default: true
+          description: |
+            `true` (default): at confirm, Wire routes to the best eligible
+            operator. `false`: the first entry of `allowed_operators` is used
+            unless `/confirm` names an `operator` — so with `false` you must
+            send `allowed_operators` or an explicit operator.
+        allowed_operators:
+          type: array
+          maxItems: 10
+          items: { type: string }
+          description: |
+            Optional. Restricts which operators may be used for this intent.
+            **Omit it** to allow every operator switched on for your
+            project (recommended). Values are operator ids enabled on your
+            account, as shown on the dashboard's Connectors page. An unknown
+            id → `400 operator_unknown` with param `allowed_operators[i]`
+            naming the offending value; more than 10 entries is also refused.
+          examples: [[op_example]]
+        metadata:
+          type: object
+          maxProperties: 50
+          additionalProperties: { type: string, maxLength: 500 }
+          description: Your own key/value strings (e.g. your order id), returned on every read. Up to 50 keys; keys 1–40 characters; values up to 500 characters. Violations → `400 metadata_invalid`.
+          examples: [{ order_id: "1001" }]
+
+    PaymentIntentConfirm:
+      type: object
+      description: Optional body for confirm. An empty body (or no body) is valid.
+      properties:
+        operator:
+          type: string
+          description: Operator id to use. Optional — when omitted, routing (or the first `allowed_operators` entry) decides. Must be in `allowed_operators` if that list is set.
+          examples: [op_example]
+        return_url:
+          type: string
+          format: uri
+          description: Where the operator should send the buyer after a redirect-type payment. Passed to the operator; ignored by operators that don't redirect.
+          examples: [https://yourshop.mn/orders/1001]
+
+    PaymentIntent:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique id, prefix `pi_`.
+          examples: [pi_k3vq7m2xw5nbt4rj6yhc2dpa7e]
+        object: { type: string, const: payment_intent, description: Always `payment_intent`. }
+        amount:
+          type: integer
+          description: Amount in MNT (whole tögrög).
+          examples: [15000]
+        currency: { type: string, description: "Always `MNT`.", examples: [MNT] }
+        description:
+          type: string
+          description: Transaction description shown to the payer. Empty string when not set.
+          examples: ["Order #1001"]
+        status:
+          type: string
+          enum: [new, requires_payment_method, requires_action, requires_capture, processing, succeeded, canceled]
+          description: |
+            - `requires_payment_method` — created, waiting to be confirmed (initial state; also returned to after a failed attempt).
+            - `requires_action` — confirmed; the buyer must act on `next_action` (scan the QR, approve in a bank app, follow a redirect).
+            - `processing` — the operator reported the payment; settling.
+            - `succeeded` — paid. Final.
+            - `canceled` — canceled by you or expired unpaid. Final.
+            - `requires_capture`, `new` — reserved; not produced by current operators.
+        client_secret:
+          type: string
+          description: Random secret generated for the intent (`cs_…`). Not needed by any `/v1` call; do not expose it publicly.
+        automatic_operator: { type: boolean, description: "Whether routing chooses the operator at confirm (see `PaymentIntentCreate`)." }
+        allowed_operators:
+          type: array
+          items: { type: string }
+          description: The operator restriction you set; `[]` means every operator enabled on the project.
+          examples: [[]]
+        selected_operator:
+          type: [string, "null"]
+          description: The operator chosen at confirm; `null` until confirmed.
+          examples: [op_example]
+        next_action:
+          oneOf:
+            - $ref: "#/components/schemas/NextAction"
+            - type: "null"
+          description: What the buyer must do next. Set when `status` is `requires_action`, otherwise `null`.
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+          description: Your key/value strings; `{}` when none.
+        livemode: { type: boolean, description: "Always `true` on this API (the object was created with a live key)." }
+        created:
+          type: integer
+          description: Creation time, Unix seconds (UTC).
+          examples: [1791774000]
+        expires_at:
+          type: [integer, "null"]
+          description: When an unpaid intent expires, Unix seconds (UTC). By default 10 minutes after creation; confirm may replace it with the operator invoice's own expiry. Expired unpaid intents are canceled automatically.
+          examples: [1791774600]
+
+    NextAction:
+      type: object
+      description: Operator-agnostic instruction for the buyer. Read `type`, then the field of the same name.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [qr, redirect_to_url, loan_app, loan_credit_decision, poll]
+          description: |
+            - `qr` — show `qr.text` as a QR code (or `qr.image_url`), and offer `qr.deeplinks` on mobile.
+            - `redirect_to_url` — send the buyer to `redirect_to_url.url`.
+            - `loan_app` — open `loan_app.deeplink` in the lender's app.
+            - `loan_credit_decision` — the lender is deciding; just wait.
+            - `poll` — nothing to show; wait for the result.
+        qr:
+          type: object
+          properties:
+            text: { type: string, description: "QR payload — render this as a QR code." }
+            image_url: { type: string, description: "Ready-made QR image, when the operator provides one." }
+            deeplinks:
+              type: array
+              description: Bank / wallet app links that open the same payment on a phone.
+              items:
+                type: object
+                properties:
+                  name: { type: string, description: "App name to show." }
+                  description: { type: string, description: Optional longer label. }
+                  logo: { type: string, description: "Logo URL." }
+                  link: { type: string, description: "The app deeplink." }
+        redirect_to_url:
+          type: object
+          properties:
+            url: { type: string, description: "Where to send the buyer." }
+            method: { type: string, description: "`GET` (default) or `POST`." }
+            body: { type: object, additionalProperties: { type: string }, description: "Form fields to POST, when `method` is `POST`." }
+        loan_app:
+          type: object
+          properties:
+            deeplink: { type: string, description: "Link that opens the lender's app." }
+            application_id: { type: string, description: "The lender's application id." }
+            expires_at: { type: string, format: date-time, description: When the application expires (RFC 3339). }
+        loan_credit_decision:
+          type: object
+          properties:
+            application_id: { type: string, description: "The lender's application id." }
+            poll_url: { type: string, description: "Optional status URL." }
+            expires_at: { type: string, format: date-time, description: When the decision window ends (RFC 3339). }
+        poll:
+          type: object
+          properties:
+            url: { type: string, description: "Operator status URL." }
+
+    CheckoutSessionCreate:
+      type: object
+      required: [payment_intent]
+      properties:
+        payment_intent:
+          type: string
+          description: Id of a PaymentIntent in `requires_payment_method` (`pi_…`).
+          examples: [pi_k3vq7m2xw5nbt4rj6yhc2dpa7e]
+        success_url:
+          type: string
+          format: uri
+          description: Optional. Absolute `http(s)` URL the buyer returns to after paying. Omit it to show Wire's own completion screen.
+          examples: [https://yourshop.mn/orders/1001]
+        cancel_url:
+          type: string
+          format: uri
+          description: Optional. Absolute `http(s)` URL the buyer returns to if they abandon the payment.
+          examples: [https://yourshop.mn/cart]
+        allowed_operators:
+          type: array
+          items: { type: string }
+          description: Optional. Operator ids to offer on this page; defaults to the intent's `allowed_operators`, else every operator enabled on the project. Operators without an active connection on the project are never shown.
+
+    CheckoutSession:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique id, prefix `cs_`.
+          examples: [cs_w6qz3k2mx5tn4vbr7cyj2hpa5k]
+        object: { type: string, const: checkout_session, description: Always `checkout_session`. }
+        payment_intent: { type: string, description: "The PaymentIntent this page collects." }
+        status:
+          type: string
+          enum: [open, complete, expired]
+          description: "`open` — buyer can pay; `complete` — the intent was paid; `expired` — the intent expired before payment."
+        url:
+          type: string
+          description: The hosted payment page. Redirect the buyer here.
+          examples: [https://pay.wire.mn/c/cs_w6qz3k2mx5tn4vbr7cyj2hpa5k]
+        success_url: { type: string, description: "As sent; empty string when not set." }
+        cancel_url: { type: string, description: "As sent; empty string when not set." }
+        allowed_operators:
+          type: array
+          items: { type: string }
+          description: As sent; `[]` when not set.
+        created: { type: integer, description: "Creation time, Unix seconds (UTC)." }
+
+    Charge:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique id, prefix `ch_`.
+          examples: [ch_m4tz2q7wn5kc3vbx6ryj2hfa5d]
+        object: { type: string, const: charge, description: Always `charge`. }
+        payment_intent: { type: string, description: "The PaymentIntent this charge belongs to." }
+        operator: { type: string, description: "Id of the operator that handled the charge." }
+        operator_charge_id:
+          type: [string, "null"]
+          description: The operator's own reference for this payment (invoice id). Use it when talking to the operator.
+        status:
+          type: string
+          enum: [pending, succeeded, failed]
+          description: "`pending` — waiting for the buyer; `succeeded` — paid (final); `failed` — not paid (final)."
+        amount: { type: integer, description: "Amount in MNT (whole tögrög)." }
+        fee:
+          type: integer
+          description: Fee in MNT recorded on this charge. Currently always `0` — operator fees are not reported through this field.
+        amount_refunded:
+          type: integer
+          description: MNT already refunded or reserved by refunds in progress (including `manual_required`). Refundable remainder = `amount − amount_refunded`.
+        failure_code: { type: [string, "null"], description: Why the charge failed; `null` unless `failed`. }
+        failure_message: { type: [string, "null"], description: Human-readable failure reason; `null` unless `failed`. }
+        livemode: { type: boolean, description: "Always `true` on this API." }
+        created: { type: integer, description: "Creation time, Unix seconds (UTC)." }
+
+    RefundCreate:
+      type: object
+      required: [charge]
+      properties:
+        charge:
+          type: string
+          description: The `succeeded` charge to refund (`ch_…`). Find it with `GET /v1/charges?payment_intent=pi_…`.
+          examples: [ch_m4tz2q7wn5kc3vbx6ryj2hfa5d]
+        amount:
+          type: integer
+          minimum: 1
+          description: MNT to refund. Omit for the full remaining amount. Must not exceed `amount − amount_refunded` of the charge.
+          examples: [5000]
+        reason:
+          type: string
+          maxLength: 500
+          description: Optional free-text reason, at most 500 bytes.
+          examples: ["Item out of stock"]
+
+    Refund:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique id, prefix `re_`.
+          examples: [re_p2wq5t7xk3mz4vnb6cyr2jga3f]
+        object: { type: string, const: refund, description: Always `refund`. }
+        charge: { type: string, description: "The refunded charge." }
+        amount: { type: integer, description: "Refunded amount in MNT." }
+        reason: { type: [string, "null"], description: The reason you sent; `null` when none. }
+        status:
+          type: string
+          enum: [pending, succeeded, failed, manual_required]
+          description: |
+            - `succeeded` — money returned through the operator.
+            - `manual_required` — the operator does not support API refunds; recorded and completed by Wire operations outside the API.
+            - `pending` — accepted by the operator, not finished.
+            - `failed` — the operator refused; the reserved amount was released.
+        operator_refund_id: { type: [string, "null"], description: The operator's reference for the refund; `null` when none. }
+        livemode: { type: boolean, description: "Always `true` on this API." }
+        created: { type: integer, description: "Creation time, Unix seconds (UTC)." }
+
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique id, prefix `evt_`. Deduplicate webhook deliveries on it.
+          examples: [evt_b7nx3k2qw5mv4tzc6jry2pha4g]
+        object: { type: string, const: event, description: Always `event`. }
+        type:
+          type: string
+          enum: [payment_intent.succeeded, payment_intent.payment_failed, payment_intent.canceled, charge.refunded]
+          description: What happened. See the Webhooks section for each type's `data`.
+        api_version: { type: string, description: "API version the payload was built with.", examples: ["2026-05-09"] }
+        data:
+          $ref: "#/components/schemas/EventData"
+        livemode: { type: boolean, description: "Always `true` on this API." }
+        created: { type: integer, description: "When the event happened, Unix seconds (UTC)." }
+
+    EventData:
+      type: object
+      description: |
+        Snapshot of the affected object. For `payment_intent.*` events:
+        `id`, `object` (`payment_intent`), `status`, `amount`, `currency`,
+        and `charge` (not on `payment_intent.canceled`). For
+        `charge.refunded`: `id` (refund), `object` (`refund`), `charge`,
+        `amount`, `status`, `refunded_total`.
+      properties:
+        id: { type: string, description: "Id of the PaymentIntent (`pi_…`) or Refund (`re_…`)." }
+        object: { type: string, enum: [payment_intent, refund], description: Type of `id`. }
+        status: { type: string, description: "The object's status when the event happened." }
+        amount: { type: integer, description: "PaymentIntent amount, or refunded amount, in MNT." }
+        currency: { type: string, description: "`MNT` (payment_intent events only)." }
+        charge: { type: string, description: "The related charge (`ch_…`). Absent on `payment_intent.canceled`." }
+        refunded_total: { type: integer, description: "Charge's total refunded MNT so far (`charge.refunded` only)." }
+
+    WebhookEvent:
+      type: object
+      description: |
+        Body Wire POSTs to your webhook endpoint. Signed with the
+        `WirePayment-Signature: t=<unix>,v1=<hex>` header —
+        `v1 = hex(HMAC_SHA256(whsec_secret, t + "." + raw_body))`. Verify
+        against the raw bytes before parsing.
+      required: [id, object, type, created, data]
+      properties:
+        id: { type: string, description: "Event id (`evt_…`) — same as `GET /v1/events/{id}`." }
+        object: { type: string, const: event, description: Always `event`. }
+        type: { type: string, description: "Event type." }
+        created: { type: integer, description: "When the event happened, Unix seconds (UTC)." }
+        data: { $ref: "#/components/schemas/EventData" }
+
+    WebhookEndpointCreate:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Public `http(s)` URL that receives events. Not `localhost` or a private / loopback IP.
+          examples: [https://yourshop.mn/webhooks/wire]
+        enabled_events:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            enum: ["*", payment_intent.succeeded, payment_intent.payment_failed, payment_intent.canceled, charge.refunded]
+          description: Events to receive. Defaults to `["*"]` (all events).
+          examples: [[payment_intent.succeeded]]
+
+    WebhookEndpointUpdate:
+      type: object
+      description: Send only the fields to change.
+      properties:
+        url:
+          type: string
+          format: uri
+          description: New URL. On a verified endpoint it is staged until the new URL passes verification in the dashboard.
+        enabled_events:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            enum: ["*", payment_intent.succeeded, payment_intent.payment_failed, payment_intent.canceled, charge.refunded]
+          description: Replaces the subscribed events.
+        status:
+          type: string
+          enum: [enabled, disabled]
+          description: "`disabled` pauses delivery; `enabled` resumes it (an unverified endpoint still receives nothing)."
+
+    WebhookEndpoint:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique id, prefix `we_`.
+          examples: [we_t5kz2m7qx3wn4vbc6rjy2dfa6h]
+        object: { type: string, const: webhook_endpoint, description: Always `webhook_endpoint`. }
+        url: { type: string, description: "Where events are delivered." }
+        enabled_events:
+          type: array
+          items: { type: string }
+          description: Subscribed event types; `["*"]` = all.
+        status:
+          type: string
+          enum: [pending, enabled, disabled]
+          description: "`pending` — created, not verified yet, receives nothing; `enabled` — verified and receiving; `disabled` — paused."
+        livemode: { type: boolean, description: "Always `true` on this API." }
+        created: { type: integer, description: "Creation time, Unix seconds (UTC)." }
+
+    WebhookEndpointWithSecret:
+      allOf:
+        - $ref: "#/components/schemas/WebhookEndpoint"
+        - type: object
+          properties:
+            secret:
+              type: string
+              description: Signing secret (`whsec_…`), returned only at creation. Use it to verify the `WirePayment-Signature` header.
+
+    OperatorConnectionCreate:
+      type: object
+      required: [operator, credentials]
+      properties:
+        operator:
+          type: string
+          description: Operator id, as shown on the dashboard's Connectors page.
+          examples: [op_example]
+        mode:
+          type: string
+          enum: [byo, reseller]
+          default: byo
+          description: "Must be `byo` (your own operator credentials). `reseller` connections are provisioned by Wire through the dashboard and are refused here with `operator_connection_invalid`."
+        credentials:
+          type: object
+          additionalProperties: { type: string }
+          description: Operator-specific credential key/value pairs (must not be empty). Encrypted at rest; never returned.
+
+    OperatorConnection:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique id, prefix `opc_`.
+          examples: [opc_r3mq7z2kw5xt4nvb6cyj2ega2c]
+        object: { type: string, const: operator_connection, description: Always `operator_connection`. }
+        operator: { type: string, description: "Operator id." }
+        mode:
+          type: string
+          enum: [byo, reseller]
+          description: "`byo` — your credentials; `reseller` — provisioned by Wire."
+        status:
+          type: string
+          enum: [active, inactive]
+          description: "`active` — can carry payments (if also switched on for the project); `inactive` — cannot."
+        capabilities:
+          type: array
+          items: { type: string }
+          description: "What the operator supports, e.g. `refund.full`, `refund.partial`, `loan.flow`."
+        created: { type: integer, description: "Creation time, Unix seconds (UTC)." }
+
+    OperatorConnectionTest:
+      type: object
+      properties:
+        object: { type: string, const: operator_connection_test, description: Always `operator_connection_test`. }
+        operator: { type: string, description: "Operator id." }
+        status:
+          type: string
+          enum: [ok, unreachable]
+          description: "`ok` — the connection is now `active`; `unreachable` — the operator did not answer; nothing changed."
+        capabilities:
+          type: array
+          items: { type: string }
+          description: The operator's capabilities.
+
+    RoutingPreview:
+      type: object
+      properties:
+        object: { type: string, const: routing_preview, description: Always `routing_preview`. }
+        selected: { type: string, description: "The operator routing would pick." }
+        reason: { type: string, description: Human-readable explanation of the choice. }
+        fallback_chain:
+          type: array
+          items: { type: string }
+          description: All eligible operators, best first (`[0]` = `selected`).
+        scored:
+          type: array
+          description: Score breakdown per eligible operator.
+          items:
+            type: object
+            properties:
+              operator: { type: string, description: "Operator id." }
+              score:
+                type: object
+                description: Weighted components (0–1); higher is better.
+                properties:
+                  success: { type: number, description: "Recent success-rate component." }
+                  latency: { type: number, description: "Recent latency component." }
+                  priority: { type: number, description: "Your configured priority component." }
+                  total: { type: number, description: "Combined score used for ranking." }
+              fee_minor: { type: integer, description: "Per-transaction fee in MNT used as a tie-breaker." }

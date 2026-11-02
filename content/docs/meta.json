@@ -1,0 +1,28 @@
+{
+  "title": "Баримт бичиг",
+  "pages": [
+    "index",
+    "quickstart",
+    "---Үндсэн ойлголт---",
+    "concepts/authentication",
+    "concepts/idempotency",
+    "concepts/pagination",
+    "concepts/errors",
+    "concepts/money-and-time",
+    "---Гарын авлага---",
+    "guides/going-live",
+    "guides/payment-links",
+    "guides/webhooks",
+    "guides/hosted-checkout",
+    "---SDK-ууд---",
+    "sdk/index",
+    "sdk/go",
+    "sdk/python",
+    "sdk/node",
+    "sdk/php",
+    "sdk/ruby",
+    "sdk/dotnet",
+    "---Лавлах---",
+    "api"
+  ]
+}

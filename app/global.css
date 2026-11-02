@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@import "fumadocs-openapi/css/preset.css";
+
+@theme {
+  --font-display: var(--font-rubik), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-rubik), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+  --font-round: var(--font-comfortaa), ui-sans-serif, system-ui, sans-serif;
+  --color-fd-primary: #10b981;
+}
+
+/* body copy follows the brand UI voice */
+body {
+  font-family: var(--font-sans);
+}

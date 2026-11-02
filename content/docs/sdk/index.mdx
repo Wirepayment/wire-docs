@@ -1,0 +1,36 @@
+---
+title: SDK-ууд
+description: Wire-ийн албан ёсны server болон client SDK-ууд.
+---
+
+Wire нь олон хэл дээр албан ёсны SDK-уудтай. **Server SDK**-ууд нь нууц
+түлхүүр (`sk_`) ашиглан PaymentIntent/charge/webhook зэргийг удирдана.
+**Client checkout SDK**-ууд нь нууц түлхүүргүйгээр `pay.wire.mn` дээрх
+hosted checkout-ийг апп/вэбэд оруулна.
+
+## Server SDK-ууд
+
+| Хэл | Суулгах | Багц |
+|---|---|---|
+| Go | `go get github.com/buildry-wire/wire-go` | [pkg.go.dev](https://pkg.go.dev/github.com/buildry-wire/wire-go) · [guide](/docs/sdk/go) |
+| Python | `pip install wirepayment` | [PyPI](https://pypi.org/project/wirepayment/) · [guide](/docs/sdk/python) |
+| Node / TypeScript | `npm install @buildry-wire/wire` | [npm](https://www.npmjs.com/package/@buildry-wire/wire) · [guide](/docs/sdk/node) |
+| PHP | `composer require buildry-wire/wire-php` | [Packagist](https://packagist.org/packages/buildry-wire/wire-php) · [guide](/docs/sdk/php) |
+| Ruby | `gem install wirepayment` | [RubyGems](https://rubygems.org/gems/wirepayment) · [guide](/docs/sdk/ruby) |
+| .NET / C# | `dotnet add package Wirepayment` | [NuGet](https://www.nuget.org/packages/Wirepayment) · [guide](/docs/sdk/dotnet) |
+
+Бүх server SDK ижил гэрээтэй: Bearer `sk_` client, POST дээр автомат
+idempotency, cursor auto-pagination, typed error (`request_id`/`status`),
+retry+backoff (429/5xx/network), webhook verify (HMAC-SHA256, fail-closed).
+
+## Client checkout SDK-ууд
+
+Нууц түлхүүргүй — `pay.wire.mn/c/{token}`-ийг танилцуулж, `GET
+/checkout/{token}/status`-ийг эх сурвалж болгон poll хийнэ.
+
+| Платформ | Суулгах | Багц |
+|---|---|---|
+| JavaScript | `npm install @buildry-wire/checkout` | [npm](https://www.npmjs.com/package/@buildry-wire/checkout) |
+| iOS (SwiftPM) | `https://github.com/buildry-wire/wire-checkout-ios` (from `1.0.0`) | [repo](https://github.com/buildry-wire/wire-checkout-ios) |
+
+Дэлгэрэнгүй: [Hosted checkout](/docs/guides/hosted-checkout).

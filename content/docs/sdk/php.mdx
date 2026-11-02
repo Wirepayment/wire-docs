@@ -1,0 +1,42 @@
+---
+title: PHP SDK
+description: Wire payment API-ийн албан ёсны PHP SDK.
+---
+
+[Wire](https://wire.mn)-ийн албан ёсны PHP SDK.
+
+- **Repository:** [github.com/buildry-wire/wire-php](https://github.com/buildry-wire/wire-php)
+- **Packagist:** [packagist.org/packages/buildry-wire/wire-php](https://packagist.org/packages/buildry-wire/wire-php)
+
+## Суулгах
+
+```bash
+composer require buildry-wire/wire-php
+```
+
+## Эхлүүлж дуудлага хийх
+
+```php
+use BuildryWire\Wire\Wire;
+
+$wire = new Wire('sk_live_...');
+
+// Дүн нь бүхэл төгрөг (15000 = 15,000 ₮). allowed_operators-гүй бол project дээр асаасан бүх оператор ашиглагдана.
+$pi = $wire->paymentIntents->create([
+    'amount' => 15000,
+    'currency' => 'MNT',
+]);
+
+echo $pi->id, ' ', $pi->status, PHP_EOL;
+
+// Баталгаажуул.
+$pi = $wire->paymentIntents->confirm($pi->id, [
+    'return_url' => 'https://example.com/return',
+]);
+```
+
+## Дэлгэрэнгүй
+
+- [Quickstart](/docs/quickstart)
+- [Webhooks](/docs/guides/webhooks)
+- [API reference](/docs/api)

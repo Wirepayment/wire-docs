@@ -1,0 +1,51 @@
+---
+title: Go SDK
+description: Official Go SDK for the Wire payment API.
+---
+
+The official Go SDK for [Wire](https://wire.mn).
+
+- **Repository:** [github.com/buildry-wire/wire-go](https://github.com/buildry-wire/wire-go)
+- **Reference:** [pkg.go.dev/github.com/buildry-wire/wire-go](https://pkg.go.dev/github.com/buildry-wire/wire-go)
+
+## Install
+
+```bash
+go get github.com/buildry-wire/wire-go
+```
+
+## Initialize and make a call
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	wire "github.com/buildry-wire/wire-go"
+)
+
+func main() {
+	client := wire.NewClient("sk_live_...")
+	ctx := context.Background()
+
+	pi, err := client.PaymentIntents.Create(ctx, &wire.PaymentIntentCreateParams{
+		Amount:           15000, // 15,000 ₮ — whole tögrög
+		Currency:         "MNT",
+		Description:      "Order #1001", // transaction description (optional)
+		IdempotencyKey:   "order-1001",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(pi.ID, pi.Status)
+}
+```
+
+## Learn more
+
+- [Quickstart](/docs/quickstart)
+- [Webhooks](/docs/guides/webhooks) — `client.Webhooks.Verify`
+- [API reference](/docs/api)

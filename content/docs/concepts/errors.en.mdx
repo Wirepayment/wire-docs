@@ -1,0 +1,97 @@
+---
+title: Errors
+description: How the API signals failures and how the SDKs surface them.
+---
+
+Wire uses conventional HTTP status codes: `2xx` for success, `4xx` for client
+errors (bad input, auth, idempotency conflicts), and `5xx` for server errors.
+
+Error responses carry a machine-readable `code`, a human-readable `message`, and
+a `request_id` you can quote in support requests.
+
+## The error envelope
+
+Every failure has the same shape — one `error` object, whatever the status code:
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "code": "amount_invalid",
+    "message": "...",
+    "param": "amount",
+    "request_id": "req_..."
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `type` | Error category (e.g. `invalid_request_error`, `api_error`). |
+| `code` | Stable, machine-readable code — branch your logic on this. |
+| `message` | Human-readable explanation. The wording may change; never branch on it. |
+| `param` | Which input was at fault, when applicable. |
+| `request_id` | Identifier for this request. Log it and quote it in support requests. |
+
+## Common codes
+
+| Status | Meaning                                                       |
+| ------ | ------------------------------------------------------------ |
+| `400`  | Invalid request (e.g. `amount_too_small`).                   |
+| `401`  | Missing or invalid API key (`api_key_missing`, `api_key_invalid`). |
+| `401`  | `test_mode_unavailable` — a test key (`sk_test_…`) was sent. Test keys are not accepted by this API; use a live secret key. |
+| `402`  | The operator declined the payment (`type: payment_method_error`). |
+| `403`  | `dan_verification_required` — the account owner must complete citizen identity verification (DAN) before the API can be used. |
+| `403`  | `connector_required` — connect at least one payment operator before creating payments. Dashboard → Connectors. |
+| `403`  | `settlement_account_required` — choose the bank account the operator pays into. Dashboard → Accounts. |
+| `404`  | Object not found.                                            |
+| `409`  | Idempotency conflict.                                        |
+| `424`  | The operator failed or timed out (`type: operator_error`, e.g. `operator_timeout`). Retry with the same `Idempotency-Key`. |
+| `429`  | Rate limited — back off and retry.                           |
+| `5xx`  | Server error — safe to retry idempotent requests.           |
+
+## Common `400`/`409` pitfalls
+
+| Code | Cause and fix |
+| --- | --- |
+| `payment_intent_unexpected_state` | A checkout session can only be created for an intent in the `requires_payment_method` state. The intent was already confirmed, cancelled, or auto-cancelled after its TTL (10 minutes by default). When using hosted checkout, don't call `/confirm` — create a fresh intent and open the session right away. |
+| `operator_unknown` (`param: allowed_operators[i]`) | An `allowed_operators` entry is not an operator id available on the API (the message names the value), or the list has more than 10 entries. Omit `allowed_operators` to use every operator switched on for your project, or copy ids from the dashboard's Connectors page. |
+| `operator_not_allowed` | At confirm: the chosen operator is not in `allowed_operators`, no eligible operator was found, or the operator has no active connection / is not switched on for this project. |
+| `invalid_json` | The body is not JSON. Send `Content-Type: application/json` and a JSON body — form-encoded bodies (`curl -d key=value`) are not accepted. |
+| `parameter_missing` (`param: Idempotency-Key`) | Every `POST` and `DELETE` needs an `Idempotency-Key` header. |
+| `checkout_url_invalid` | `success_url` / `cancel_url` must be absolute http(s) URLs. Both are optional — omit them and the hosted page shows its own completion screen. |
+| `idempotency_in_flight` (409) | A duplicate request arrived while the first request with the same `Idempotency-Key` was still being processed. Wait for the first response (or a second or two) and retry — the recorded result is replayed. |
+
+## Handling errors in the SDKs
+
+Each SDK raises a typed error exposing `code`, `request_id`, and `status_code`.
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+var werr *wire.Error
+if errors.As(err, &werr) {
+	fmt.Println(werr.Code, werr.RequestID, werr.StatusCode)
+}
+```
+  </Tab>
+  <Tab value="Python">
+```python
+try:
+    client.payment_intents.create(amount=-1)
+except wire.WireError as e:
+    print(e.code, e.request_id, e.status_code)
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+import { WireError } from "@buildry-wire/wire";
+
+try {
+  await wire.paymentIntents.create({ amount: -1 });
+} catch (e) {
+  if (e instanceof WireError) console.log(e.code, e.requestId, e.statusCode);
+}
+```
+  </Tab>
+</Tabs>

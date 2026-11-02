@@ -1,0 +1,76 @@
+---
+title: Idempotency
+description: Safely retry mutating requests without creating duplicates.
+---
+
+Network calls can fail after the server has already processed them. To make
+retries safe, Wire supports **idempotency keys** on mutating `POST` requests.
+
+An `Idempotency-Key` header is **required** on every `POST` and `DELETE`
+(PaymentIntents, confirm, cancel, checkout sessions, refunds, webhook
+endpoints, …). Without it the API answers `400 parameter_missing`
+(`param: "Idempotency-Key"`). Keys can be up to 255 characters.
+
+```bash
+curl https://api.wire.mn/v1/payment_intents \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1001" \
+  -d '{"amount": 15000, "currency": "MNT"}'
+```
+
+A replayed response carries the header `Idempotent-Replayed: true`.
+
+## How it works
+
+- The server stores the result of the first request under your key.
+- Replaying the **same key** with the **same body** returns the original
+  response — no duplicate object is created. The same key with a different
+  body returns `409 idempotency_key_in_use`.
+- Successful (`2xx`) and declined (`402`) responses are recorded. Other errors
+  (e.g. a `400` for a missing field) are not, so after fixing the request you
+  can retry with the same key.
+- Use a unique, stable key per logical operation (e.g. your order id). Generate
+  a fresh UUID for genuinely new operations.
+- Keys are scoped to the **project of the API key** you send them with. Two
+  projects (say, two of your sites) can therefore use the same `order-1001`
+  independently — neither ever receives the other's response.
+- A recorded response lives for **48 hours**. Inside that window the same key
+  always replays the original response; after it expires the same key counts as
+  a brand-new operation, so keep your retries within 48 hours.
+
+<Callout type="warn">
+  A second request carrying a key whose first request is still being processed
+  gets `409 idempotency_in_flight`. Wait a second or two and retry — the
+  recorded response is then replayed. See [Errors](/docs/concepts/errors).
+</Callout>
+
+## SDK usage
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+pi, err := client.PaymentIntents.Create(ctx, &wire.PaymentIntentCreateParams{
+	Amount:         15000,
+	Currency:       "MNT",
+	IdempotencyKey: "order-1001",
+})
+```
+  </Tab>
+  <Tab value="Python">
+```python
+pi = client.payment_intents.create(
+    amount=15000, currency="MNT", idempotency_key="order-1001",
+)
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+const pi = await wire.paymentIntents.create({
+  amount: 15000,
+  currency: "MNT",
+  idempotencyKey: "order-1001",
+});
+```
+  </Tab>
+</Tabs>

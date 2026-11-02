@@ -1,0 +1,40 @@
+---
+title: .NET SDK
+description: Official .NET (C#) SDK for the Wire payment API.
+---
+
+The official .NET (C#) SDK for [Wire](https://wire.mn).
+
+- **Repository:** [github.com/buildry-wire/wire-dotnet](https://github.com/buildry-wire/wire-dotnet)
+- **NuGet:** [nuget.org/packages/Wirepayment](https://www.nuget.org/packages/Wirepayment)
+
+## Install
+
+```bash
+dotnet add package Wirepayment
+```
+
+## First call
+
+```csharp
+using Wire;
+
+using var wire = new WireClient("sk_live_...");
+
+// Amounts are whole tögrög (15000 = 15,000 ₮). Without allowed_operators every operator switched on for your project is used.
+var pi = await wire.PaymentIntents.CreateAsync(new PaymentIntentCreateParams
+{
+    Amount = 15000,
+    Currency = "MNT",
+    Description = "Order #1001", // transaction description (optional)
+});
+
+var confirmed = await wire.PaymentIntents.ConfirmAsync(pi.Id);
+Console.WriteLine($"{confirmed.Id} {confirmed.Status}");
+```
+
+## Learn more
+
+- [Quickstart](/en/docs/quickstart)
+- [Webhooks](/en/docs/guides/webhooks)
+- [API reference](/en/docs/api)

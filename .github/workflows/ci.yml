@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Public repo: CI runs on GitHub-hosted runners (free for public repos), never
+# on a self-hosted machine — a pull request from a fork must not run its code
+# on our infrastructure. The check job needs no secrets, so fork and
+# Dependabot PRs run the full suite.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      WIRE_LANDING_DIR: ${{ github.workspace }}/siblings/wire-landing
+    # This repo in self/, siblings next to it in siblings/ — never inside the
+    # app, where Prettier, tsc and vitest would pick their files up.
+    defaults:
+      run:
+        working-directory: self
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: self
+
+      # The contract tests read wire-landing (public, no key needed).
+      - uses: actions/checkout@v7
+        with:
+          repository: Wirepayment/wire-landing
+          ref: main
+          persist-credentials: false
+          path: siblings/wire-landing
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: self/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: self/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - run: pnpm dlx prettier@3.9.6 --check .
+
+      # build first: typecheck needs .source/ and .next/types from it.
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # Every green main commit publishes the image production runs, tagged with
+  # the commit sha.
+  image:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # GHCR names must be lowercase; the org is "Wirepayment".
+      IMAGE: ghcr.io/wirepayment/wire-docs
+    steps:
+      - uses: actions/checkout@v7
+
+      # NEXT_PUBLIC_* are inlined at build time: an image without the DSN
+      # ships without error reporting. Refuse rather than warn.
+      - name: sentry inputs
+        env:
+          DSN: ${{ vars.NEXT_PUBLIC_SENTRY_DSN }}
+        run: |
+          if [ -z "$DSN" ]; then
+            echo "::error::NEXT_PUBLIC_SENTRY_DSN variable unset — refusing to publish without Sentry"
+            exit 1
+          fi
+
+      - name: ghcr login
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: build
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          DOCKER_BUILDKIT=1 docker build \
+            --build-arg "NEXT_PUBLIC_DASHBOARD_URL=${{ vars.NEXT_PUBLIC_DASHBOARD_URL || 'https://app.wire.mn' }}" \
+            --build-arg "NEXT_PUBLIC_SENTRY_DSN=${{ vars.NEXT_PUBLIC_SENTRY_DSN }}" \
+            --build-arg "NEXT_PUBLIC_SENTRY_ENV=production" \
+            --build-arg "NEXT_PUBLIC_GIT_SHA=${{ github.sha }}" \
+            --build-arg "SENTRY_ORG=${{ vars.SENTRY_ORG }}" \
+            --build-arg "SENTRY_PROJECT=${{ vars.SENTRY_PROJECT }}" \
+            --secret "id=sentrytoken,env=SENTRY_AUTH_TOKEN" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:main" .
+
+      # Retried: GHCR occasionally answers `denied` on a first push.
+      - name: push
+        run: |
+          for tag in "${{ github.sha }}" main; do
+            for attempt in 1 2 3; do
+              docker push "$IMAGE:$tag" && break
+              [ "$attempt" = 3 ] && exit 1
+              echo "::warning::push $IMAGE:$tag failed (attempt $attempt), retrying"
+              sleep 15
+            done
+          done

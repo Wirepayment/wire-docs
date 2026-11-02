@@ -1,0 +1,28 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "quickstart",
+    "---Concepts---",
+    "concepts/authentication",
+    "concepts/idempotency",
+    "concepts/pagination",
+    "concepts/errors",
+    "concepts/money-and-time",
+    "---Guides---",
+    "guides/going-live",
+    "guides/payment-links",
+    "guides/webhooks",
+    "guides/hosted-checkout",
+    "---SDKs---",
+    "sdk/index",
+    "sdk/go",
+    "sdk/python",
+    "sdk/node",
+    "sdk/php",
+    "sdk/ruby",
+    "sdk/dotnet",
+    "---Reference---",
+    "api"
+  ]
+}

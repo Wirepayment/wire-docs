@@ -1,0 +1,217 @@
+---
+title: Webhooks
+description: Receive events reliably and verify every payload's signature.
+---
+
+Webhooks let Wire notify your server when something happens — most importantly,
+when a payment succeeds. **Never** rely on the checkout redirect alone; treat the
+verified `payment_intent.succeeded` webhook as the source of truth and confirm
+server-side.
+
+<Callout type="info">
+  Webhooks are **optional** — a payment settles correctly without them. Wire
+  polls the operator itself and updates the PaymentIntent either way. A webhook
+  is only the "tell me the moment it happens" channel; without one you pull the
+  status from the API yourself.
+</Callout>
+
+## 1. Register an endpoint
+
+Create a webhook endpoint pointing at a public HTTPS URL. The signing secret
+(prefixed `whsec_…`) is returned **once** at creation — store it securely.
+
+<Tabs items={["Go", "Python", "Node", "cURL"]}>
+  <Tab value="Go">
+```go
+ep, err := client.WebhookEndpoints.Create(ctx, &wire.WebhookEndpointCreateParams{
+	URL:            "https://yourshop.mn/webhooks/wire",
+	EnabledEvents:  []string{"payment_intent.succeeded"},
+	IdempotencyKey: "wh-ep-1",
+})
+fmt.Println(ep.Secret) // whsec_... — shown only now
+```
+  </Tab>
+  <Tab value="Python">
+```python
+ep = client.webhook_endpoints.create(
+    url="https://yourshop.mn/webhooks/wire",
+    enabled_events=["payment_intent.succeeded"],
+    idempotency_key="wh-ep-1",
+)
+print(ep.secret)  # whsec_... — shown only now
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+const ep = await wire.webhookEndpoints.create({
+  url: "https://yourshop.mn/webhooks/wire",
+  enabled_events: ["payment_intent.succeeded"],
+  idempotencyKey: "wh-ep-1",
+});
+console.log(ep.secret); // whsec_... — shown only now
+```
+  </Tab>
+  <Tab value="cURL">
+```bash
+curl https://api.wire.mn/v1/webhook_endpoints \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: wh-ep-1" \
+  -d '{
+    "url": "https://yourshop.mn/webhooks/wire",
+    "enabled_events": ["payment_intent.succeeded"]
+  }'
+```
+  </Tab>
+</Tabs>
+
+<Callout type="warn">
+  Events are only dispatched to endpoints that are both **verified** and
+  **enabled**. A newly created endpoint must be verified before it receives live
+  events.
+</Callout>
+
+An event reaches the endpoints of the **project** that produced it. If you run
+several projects — one per site, say — they never receive each other's events.
+
+Each project has **exactly one** active webhook endpoint. To move to a new
+address, update the existing endpoint's URL (or delete it first) — the database
+enforces this, so one event can never fan out to two addresses. If two separate
+systems need the events, give each its own project.
+
+## 2. Verify the endpoint
+
+A freshly created endpoint is **`pending`**. When you verify it, Wire sends a
+**signed ping** of type `endpoint.verification` to your URL: answer `2xx` and
+the endpoint becomes `verified` and starts receiving live events; otherwise it
+stays `pending`. The ping is signed exactly like a real delivery, so the
+verification code below can handle it as-is.
+
+Changing the URL of an already-verified endpoint requires the new address to
+pass its own ping first — until it does, deliveries keep flowing to the old one
+without interruption.
+
+### Firewall allowlist
+
+Every Wire delivery originates from **one fixed IP**:
+
+```text
+65.109.117.186
+```
+
+Allow that address on your endpoint's firewall or WAF and block the rest. The IP
+check does **not** replace signature verification — do both.
+
+## 3. The signature header
+
+Each delivery carries a `WirePayment-Signature` header:
+
+```text
+WirePayment-Signature: t=1717000000,v1=5257a869e7ec...
+```
+
+- `t` — the Unix timestamp (seconds) when the signature was generated.
+- `v1` — a hex-encoded HMAC-SHA256 over the string `"<t>.<rawbody>"`, keyed by
+  your endpoint secret (`whsec_…`).
+
+To verify manually: compute `HMAC_SHA256(secret, t + "." + rawBody)`, hex-encode
+it, and compare to `v1` in constant time. Reject deliveries whose timestamp is
+outside your tolerance (the SDKs default to 300 seconds).
+
+## Event types and payload
+
+Every delivery is a JSON `POST` with this envelope:
+
+```json
+{
+  "id": "evt_b7nx3k2qw5mv4tzc6jry2pha4g",
+  "object": "event",
+  "type": "payment_intent.succeeded",
+  "created": 1791774042,
+  "data": {
+    "id": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+    "object": "payment_intent",
+    "status": "succeeded",
+    "amount": 15000,
+    "currency": "MNT",
+    "charge": "ch_m4tz2q7wn5kc3vbx6ryj2hfa5d"
+  }
+}
+```
+
+| `type` | When | `data` fields |
+| --- | --- | --- |
+| `payment_intent.succeeded` | The buyer paid. Fulfil the order. | `id` (`pi_…`), `object`, `status`, `amount`, `currency`, `charge` |
+| `payment_intent.payment_failed` | The operator reported the attempt as failed. | same as above |
+| `payment_intent.canceled` | The intent was canceled, or expired unpaid. | same, without `charge` |
+| `charge.refunded` | A refund completed through the operator. | `id` (`re_…`), `object: "refund"`, `charge`, `amount`, `status`, `refunded_total` |
+
+`enabled_events` accepts these four names or `"*"` (all). Amounts are whole
+tögrög. Every event is also stored — fetch it with `GET /v1/events/{id}` to
+double-check a delivery, or list missed ones with `GET /v1/events`.
+
+Delivery retries: a `5xx`, `408`, `429` or network error is retried; any other
+`4xx` drops the delivery, so answer `2xx` once you've accepted the event.
+
+## 4. Verify in your handler
+
+Always verify against the **raw, unparsed request body** — parsing first will
+change the bytes and break the signature.
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+func handler(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	event, err := client.Webhooks.Verify(
+		body,
+		r.Header.Get(wire.SignatureHeader),
+		endpointSecret, // whsec_...
+	)
+	if err != nil {
+		http.Error(w, "bad signature", http.StatusBadRequest)
+		return
+	}
+	if event.Type == "payment_intent.succeeded" {
+		// fulfill the order
+	}
+	w.WriteHeader(http.StatusOK)
+}
+```
+  </Tab>
+  <Tab value="Python">
+```python
+import wire
+
+event = client.webhooks.verify(
+    request.body,                       # raw bytes
+    request.headers[wire.SIGNATURE_HEADER],
+    endpoint_secret,                    # whsec_...
+)
+if event.type == "payment_intent.succeeded":
+    ...  # fulfill the order
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+import { SIGNATURE_HEADER } from "@buildry-wire/wire";
+
+const event = wire.webhooks.verify(
+  rawBody, // unparsed request body (string or Buffer)
+  req.headers[SIGNATURE_HEADER.toLowerCase()],
+  endpointSecret, // whsec_...
+);
+if (event.type === "payment_intent.succeeded") {
+  // fulfill the order
+}
+```
+  </Tab>
+</Tabs>
+
+## Best practices
+
+- **Respond fast** with `2xx`, then do heavy work asynchronously.
+- **Be idempotent** — the same event may be delivered more than once. Dedupe on
+  the event `id`.
+- **Double-check server-side**: confirm the PaymentIntent status via the API
+  before fulfilling high-value orders.

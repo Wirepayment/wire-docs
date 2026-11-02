@@ -1,0 +1,219 @@
+---
+title: Webhooks
+description: Event-ийг найдвартай хүлээн авч, payload бүрийн signature-ийг шалга.
+---
+
+Webhook нь ямар нэг зүйл болоход — хамгийн чухал нь төлбөр амжилттай болоход —
+Wire таны сервер рүү мэдэгдэх боломж олгоно. Зөвхөн checkout redirect-д **хэзээ
+ч** бүү найд; баталгаажуулсан `payment_intent.succeeded` webhook-г үнэний эх
+сурвалж болгон үзэж, server талд баталгаажуул.
+
+<Callout type="info">
+  Webhook нь **нэмэлт** — төлбөр баталгаажихад шаардлагатай биш. Тохируулаагүй
+  ч Wire өөрөө оператороос статусыг шалгаж PaymentIntent-ээ шинэчилдэг тул
+  төлбөр зөв бүртгэгдэнэ. Webhook нь зүгээр л **болмогц мэдэгдэх** суваг:
+  түүнгүй бол статусаа API-аас өөрөө татаж авна.
+</Callout>
+
+## 1. Endpoint бүртгэх
+
+Нийтийн HTTPS URL руу чиглэсэн webhook endpoint үүсгэ. Гарын үсгийн нууц
+(`whsec_…` угтвартай) нь үүсгэх үед **зөвхөн нэг удаа** буцаагдана — аюулгүй
+хадгал.
+
+<Tabs items={["Go", "Python", "Node", "cURL"]}>
+  <Tab value="Go">
+```go
+ep, err := client.WebhookEndpoints.Create(ctx, &wire.WebhookEndpointCreateParams{
+	URL:            "https://yourshop.mn/webhooks/wire",
+	EnabledEvents:  []string{"payment_intent.succeeded"},
+	IdempotencyKey: "wh-ep-1",
+})
+fmt.Println(ep.Secret) // whsec_... — shown only now
+```
+  </Tab>
+  <Tab value="Python">
+```python
+ep = client.webhook_endpoints.create(
+    url="https://yourshop.mn/webhooks/wire",
+    enabled_events=["payment_intent.succeeded"],
+    idempotency_key="wh-ep-1",
+)
+print(ep.secret)  # whsec_... — shown only now
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+const ep = await wire.webhookEndpoints.create({
+  url: "https://yourshop.mn/webhooks/wire",
+  enabled_events: ["payment_intent.succeeded"],
+  idempotencyKey: "wh-ep-1",
+});
+console.log(ep.secret); // whsec_... — shown only now
+```
+  </Tab>
+  <Tab value="cURL">
+```bash
+curl https://api.wire.mn/v1/webhook_endpoints \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: wh-ep-1" \
+  -d '{
+    "url": "https://yourshop.mn/webhooks/wire",
+    "enabled_events": ["payment_intent.succeeded"]
+  }'
+```
+  </Tab>
+</Tabs>
+
+<Callout type="warn">
+  Event нь **verified** ба **enabled** хоёулаа болсон endpoint руу л
+  dispatch хийгдэнэ. Шинээр үүсгэсэн endpoint нь live event хүлээн авахаас өмнө
+  verify хийгдсэн байх ёстой.
+</Callout>
+
+Event нь өөрийг нь үүсгэсэн **project-ийн** endpoint руу очно. Хэрэв танд хэд
+хэдэн project байгаа бол (жишээ нь сайт тус бүрд нэг) тэдгээр нь бие биенийхээ
+event-ийг хүлээн авахгүй.
+
+Project бүр **яг нэг** идэвхтэй webhook endpoint-той. Шинэ хаяг руу шилжихдээ
+одоогийнхоо URL-ыг шинэчилнэ (эсвэл эхлээд устгана) — энэ хязгаарыг өгөгдлийн
+сан өөрөө барьдаг тул нэг event хоёр хаяг руу салаалах боломжгүй. Хоёр тусдаа
+систем рүү event хэрэгтэй бол хоёр project үүсгэ.
+
+## 2. Endpoint-оо баталгаажуулах
+
+Шинээр үүсгэсэн endpoint **`pending`** төлөвтэй байна. Баталгаажуулахад Wire
+таны URL руу `endpoint.verification` төрлийн **гарын үсэгтэй ping** илгээнэ:
+`2xx` хариулбал endpoint `verified` болж live event хүлээн авч эхэлнэ, эс
+тэгвэл `pending` хэвээр үлдэнэ. Ping-ийн signature жинхэнэ delivery-тэйгээ яг
+адил тул доорх шалгах кодоороо шууд угтаж болно.
+
+Аль хэдийн баталгаажсан endpoint-ийн URL-ыг солиход шинэ хаяг эхлээд ping-ээ
+давах шаардлагатай — түүнийг хүртэл delivery хуучин хаяг руугаа тасралтгүй
+үргэлжилнэ.
+
+### Firewall allowlist
+
+Wire-ийн delivery бүр **зөвхөн нэг тогтмол IP**-ээс ирнэ:
+
+```text
+65.109.117.186
+```
+
+Endpoint-ийнхээ firewall / WAF-д энэ хаягийг зөвшөөрч, бусдыг хаа. IP шалгалт нь
+signature шалгалтыг **орлохгүй** — хоёуланг нь хий.
+
+## 3. Signature header
+
+Delivery бүр `WirePayment-Signature` header авч явна:
+
+```text
+WirePayment-Signature: t=1717000000,v1=5257a869e7ec...
+```
+
+- `t` — signature үүсгэгдсэн Unix timestamp (секунд).
+- `v1` — таны endpoint secret (`whsec_…`)-ээр key хийсэн, `"<t>.<rawbody>"`
+  string дээрх hex-encoded HMAC-SHA256.
+
+Гараар шалгахдаа: `HMAC_SHA256(secret, t + "." + rawBody)`-г тооцоолж, hex-encode
+хийгээд `v1`-тэй constant time-аар харьцуул. Timestamp нь таны тэвчээрийн
+хязгаараас гадуур байвал delivery-г татгалз (SDK-ууд default-аар 300 секунд).
+
+## Event-ийн төрөл ба payload
+
+Хүргэлт бүр дараах бүтэцтэй JSON `POST`:
+
+```json
+{
+  "id": "evt_b7nx3k2qw5mv4tzc6jry2pha4g",
+  "object": "event",
+  "type": "payment_intent.succeeded",
+  "created": 1791774042,
+  "data": {
+    "id": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+    "object": "payment_intent",
+    "status": "succeeded",
+    "amount": 15000,
+    "currency": "MNT",
+    "charge": "ch_m4tz2q7wn5kc3vbx6ryj2hfa5d"
+  }
+}
+```
+
+| `type` | Хэзээ | `data` талбарууд |
+| --- | --- | --- |
+| `payment_intent.succeeded` | Худалдан авагч төлсөн. Захиалгаа биелүүл. | `id` (`pi_…`), `object`, `status`, `amount`, `currency`, `charge` |
+| `payment_intent.payment_failed` | Оператор оролдлогыг амжилтгүй гэж мэдэгдсэн. | дээрхтэй ижил |
+| `payment_intent.canceled` | Intent цуцлагдсан, эсвэл төлөгдөлгүй хугацаа нь дууссан. | ижил, `charge`-гүй |
+| `charge.refunded` | Буцаалт оператороор дамжиж дууссан. | `id` (`re_…`), `object: "refund"`, `charge`, `amount`, `status`, `refunded_total` |
+
+`enabled_events` нь эдгээр дөрвөн нэр эсвэл `"*"` (бүгд)-ийг хүлээн авна. Дүн
+бүхэл төгрөгөөр. Event бүр хадгалагддаг — хүргэлтийг дахин шалгахдаа
+`GET /v1/events/{id}`, алдсан event-үүдээ `GET /v1/events`-ээр ав.
+
+Дахин илгээлт: `5xx`, `408`, `429` эсвэл сүлжээний алдаа гарвал дахин
+илгээнэ; бусад `4xx` хүргэлтийг орхино — event-ийг хүлээж авмагц `2xx` буцаа.
+
+## 4. Handler дотроо шалга
+
+Үргэлж **raw, задлаагүй request body**-гийн эсрэг шалга — эхлээд задалбал
+байтууд өөрчлөгдөж, signature эвдэрнэ.
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+func handler(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	event, err := client.Webhooks.Verify(
+		body,
+		r.Header.Get(wire.SignatureHeader),
+		endpointSecret, // whsec_...
+	)
+	if err != nil {
+		http.Error(w, "bad signature", http.StatusBadRequest)
+		return
+	}
+	if event.Type == "payment_intent.succeeded" {
+		// fulfill the order
+	}
+	w.WriteHeader(http.StatusOK)
+}
+```
+  </Tab>
+  <Tab value="Python">
+```python
+import wire
+
+event = client.webhooks.verify(
+    request.body,                       # raw bytes
+    request.headers[wire.SIGNATURE_HEADER],
+    endpoint_secret,                    # whsec_...
+)
+if event.type == "payment_intent.succeeded":
+    ...  # fulfill the order
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+import { SIGNATURE_HEADER } from "@buildry-wire/wire";
+
+const event = wire.webhooks.verify(
+  rawBody, // unparsed request body (string or Buffer)
+  req.headers[SIGNATURE_HEADER.toLowerCase()],
+  endpointSecret, // whsec_...
+);
+if (event.type === "payment_intent.succeeded") {
+  // fulfill the order
+}
+```
+  </Tab>
+</Tabs>
+
+## Шилдэг туршлага
+
+- `2xx`-ээр **хурдан хариул**, дараа нь хүнд ажлыг асинхроноор хий.
+- **Idempotent бай** — ижил event нэгээс олон удаа delivery хийгдэж болно. Event `id`-ээр
+  давхардлыг арилга.
+- **Server талд давхар шалга**: үнэ өндөртэй захиалга биелүүлэхээс өмнө
+  PaymentIntent-ийн статусыг API-аар баталгаажуул.

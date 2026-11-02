@@ -1,0 +1,421 @@
+---
+title: Quickstart
+description: Take your first payment — PaymentIntent, hosted checkout, and a verified webhook, with copy-pasteable requests.
+---
+
+This guide walks you from zero to a paid order: create a **PaymentIntent**, send
+the buyer to **hosted checkout**, and confirm the result with a **webhook**.
+Every step shows the exact HTTP request and the response you get back.
+
+## 0. Open an account & verify (KYC)
+
+Wire is a financial service, so every owner verifies **once** after signing in
+to the dashboard — about 2 minutes total:
+
+1. **Phone** — enter your number and send one SMS to the short code shown.
+2. **Citizen identity (DAN)** — you're redirected to Mongolia's government
+   single sign-on (sso.gov.mn) and log in with your own consent. Wire never
+   sees your password; your data is stored encrypted, and one citizen can
+   verify exactly one account.
+
+Accepting payments through an operator takes a one-time activation —
+application, review, and an **electronic agreement** — see
+[Activating an operator](/docs/guides/going-live).
+
+The full sequence is:
+
+1. **Verify** — phone + DAN citizen identity, once per owner.
+2. **Create a project** — one per integration (site or app).
+3. **Activate a connector and switch it on for the project** — pick from the
+   operators enabled on your account.
+4. **Attach a settlement bank account** — where the operator pays your revenue.
+5. **Get an API key** — from your project's keys page.
+6. **Automate payments through the API** — the steps below.
+
+Until steps 3 and 4 are done, creating a payment answers
+`403 connector_required` or `403 settlement_account_required` — see
+[Errors](/docs/concepts/errors).
+
+## 1. Get your API key
+
+Every request authenticates with your project's secret key in the
+`Authorization` header. Keys are prefixed `sk_live_` and **move real money** —
+use a small amount for your first payment. Never put the key in browser or
+mobile code.
+
+```bash
+export WIRE_API_KEY="sk_live_..."
+```
+
+Two rules apply to every request:
+
+- Bodies are **JSON**: send `Content-Type: application/json`. Form-encoded
+  bodies (`curl -d key=value`) are rejected with `400 invalid_json`.
+- Every `POST` and `DELETE` needs an **`Idempotency-Key`** header. Use a stable
+  value per operation (e.g. your order id + action) so a retry never creates a
+  second payment.
+
+Amounts are **whole tögrög as integers** — `15000` means 15,000 ₮ (no
+fractions, don't multiply by 100).
+
+## 2. Install an SDK (optional)
+
+The SDKs wrap the same HTTP calls shown below.
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```bash
+go get github.com/buildry-wire/wire-go
+```
+  </Tab>
+  <Tab value="Python">
+```bash
+pip install wirepayment
+```
+  </Tab>
+  <Tab value="Node">
+```bash
+npm install @buildry-wire/wire
+```
+  </Tab>
+</Tabs>
+
+## 3. Create a PaymentIntent
+
+A PaymentIntent is the money you intend to collect for one order. Send only the
+amount (and optionally a description and your own `metadata`). Leave out
+`allowed_operators`: Wire then lets the buyer pay with **every operator
+switched on for your project**. Use `allowed_operators` only if you want to
+narrow that list to specific operator ids from your dashboard's Connectors
+page.
+
+<Tabs items={["cURL", "Go", "Python", "Node"]}>
+  <Tab value="cURL">
+```bash
+curl https://api.wire.mn/v1/payment_intents \
+  -H "Authorization: Bearer $WIRE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1001-create" \
+  -d '{
+    "amount": 15000,
+    "currency": "MNT",
+    "description": "Order #1001",
+    "metadata": { "order_id": "1001" }
+  }'
+```
+  </Tab>
+  <Tab value="Go">
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	wire "github.com/buildry-wire/wire-go"
+)
+
+func main() {
+	client := wire.NewClient("sk_live_...")
+	ctx := context.Background()
+
+	pi, err := client.PaymentIntents.Create(ctx, &wire.PaymentIntentCreateParams{
+		Amount:         15000, // 15,000 ₮ — whole tögrög
+		Currency:       "MNT",
+		Description:    "Order #1001", // shown to the payer (optional)
+		IdempotencyKey: "order-1001-create",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(pi.ID, pi.Status)
+}
+```
+  </Tab>
+  <Tab value="Python">
+```python
+import wire
+
+client = wire.Client("sk_live_...")
+
+pi = client.payment_intents.create(
+    amount=15000,                  # 15,000 ₮ — whole tögrög
+    currency="MNT",
+    description="Order #1001",     # shown to the payer (optional)
+    idempotency_key="order-1001-create",
+)
+print(pi.id, pi.status)
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+import { Wire } from "@buildry-wire/wire";
+
+const wire = new Wire("sk_live_...");
+
+const pi = await wire.paymentIntents.create({
+  amount: 15000, // 15,000 ₮ — whole tögrög
+  currency: "MNT",
+  description: "Order #1001", // shown to the payer (optional)
+  idempotencyKey: "order-1001-create",
+});
+console.log(pi.id, pi.status);
+```
+  </Tab>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+  "object": "payment_intent",
+  "amount": 15000,
+  "currency": "MNT",
+  "description": "Order #1001",
+  "status": "requires_payment_method",
+  "client_secret": "cs_n2xk5q7mw3tz4vbr6jcy2gfa7m",
+  "automatic_operator": true,
+  "allowed_operators": [],
+  "selected_operator": null,
+  "next_action": null,
+  "metadata": { "order_id": "1001" },
+  "livemode": true,
+  "created": 1791774000,
+  "expires_at": 1791774600
+}
+```
+
+`requires_payment_method` is the normal starting state ("waiting for the
+buyer"), not an error. Save the `id` with your order. The intent expires after
+**10 minutes** by default (`expires_at`), so move on to the next step right
+away.
+
+## 4. Send the buyer to hosted checkout
+
+Create a **checkout session** for the PaymentIntent and redirect the buyer to
+the returned `url`. The hosted page shows the operators, the QR code and the
+bank-app links, and confirms the payment itself.
+
+```bash
+curl https://api.wire.mn/v1/checkout/sessions \
+  -H "Authorization: Bearer $WIRE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1001-checkout" \
+  -d '{
+    "payment_intent": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+    "success_url": "https://yourshop.mn/orders/1001",
+    "cancel_url": "https://yourshop.mn/cart"
+  }'
+```
+
+Response:
+
+```json
+{
+  "id": "cs_w6qz3k2mx5tn4vbr7cyj2hpa5k",
+  "object": "checkout_session",
+  "payment_intent": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+  "status": "open",
+  "url": "https://pay.wire.mn/c/cs_w6qz3k2mx5tn4vbr7cyj2hpa5k",
+  "success_url": "https://yourshop.mn/orders/1001",
+  "cancel_url": "https://yourshop.mn/cart",
+  "allowed_operators": [],
+  "created": 1791774005
+}
+```
+
+Redirect the buyer to `url`. See the full flow in the
+[Hosted checkout guide](/docs/guides/hosted-checkout).
+
+<Callout type="warn">
+  With hosted checkout, do **not** call `/v1/payment_intents/{id}/confirm` —
+  the hosted page does that itself. A session can only be created for an
+  intent still in `requires_payment_method`; otherwise you get
+  `400 payment_intent_unexpected_state`.
+</Callout>
+
+### Alternative: build your own payment screen
+
+If you render the payment yourself instead of using the hosted page, confirm
+the intent and show the buyer its `next_action`:
+
+```bash
+curl -X POST https://api.wire.mn/v1/payment_intents/pi_k3vq7m2xw5nbt4rj6yhc2dpa7e/confirm \
+  -H "Authorization: Bearer $WIRE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1001-confirm" \
+  -d '{}'
+```
+
+The intent comes back as `requires_action` with, for example:
+
+```json
+"next_action": {
+  "type": "qr",
+  "qr": {
+    "text": "0002010102121531...",
+    "deeplinks": [
+      { "name": "Example bank", "link": "examplebank://pay?qr=..." }
+    ]
+  }
+}
+```
+
+Render `qr.text` as a QR code and offer the `deeplinks` on mobile. Other
+`next_action.type` values are `redirect_to_url`, `loan_app`,
+`loan_credit_decision` and `poll` — see the
+[PaymentIntent schema](/docs/api/schemas).
+
+## 5. Receive the webhook
+
+Don't trust the browser redirect alone — fulfil the order when your server
+receives a verified `payment_intent.succeeded` event.
+
+**Register the endpoint once per project:**
+
+```bash
+curl https://api.wire.mn/v1/webhook_endpoints \
+  -H "Authorization: Bearer $WIRE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: webhook-endpoint-1" \
+  -d '{
+    "url": "https://yourshop.mn/webhooks/wire",
+    "enabled_events": ["payment_intent.succeeded"]
+  }'
+```
+
+The response contains `"secret": "whsec_..."` — **shown only once**, store it.
+The endpoint starts as `pending`; verify it from the dashboard (Wire sends a
+signed test ping your URL must answer with `2xx`) before it receives events.
+
+**What Wire sends** (`POST` to your URL):
+
+```http
+POST /webhooks/wire HTTP/1.1
+Content-Type: application/json
+WirePayment-Signature: t=1791774042,v1=5257a869e7ec...
+
+{
+  "id": "evt_b7nx3k2qw5mv4tzc6jry2pha4g",
+  "object": "event",
+  "type": "payment_intent.succeeded",
+  "created": 1791774042,
+  "data": {
+    "id": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+    "object": "payment_intent",
+    "status": "succeeded",
+    "amount": 15000,
+    "currency": "MNT",
+    "charge": "ch_m4tz2q7wn5kc3vbx6ryj2hfa5d"
+  }
+}
+```
+
+**Verify the signature, then act.** `v1` is
+`hex(HMAC_SHA256(whsec_secret, t + "." + raw_body))`. Always verify against the
+raw, unparsed body.
+
+<Tabs items={["Node (no SDK)", "Go", "Python", "Node"]}>
+  <Tab value="Node (no SDK)">
+```ts
+import crypto from "node:crypto";
+import express from "express";
+
+const app = express();
+const SECRET = process.env.WIRE_WEBHOOK_SECRET!; // whsec_...
+
+app.post(
+  "/webhooks/wire",
+  express.raw({ type: "application/json" }), // keep the raw bytes
+  (req, res) => {
+    const header = req.header("WirePayment-Signature") ?? "";
+    const parts = Object.fromEntries(
+      header.split(",").map((p) => p.split("=") as [string, string]),
+    );
+    const t = Number(parts.t);
+    const expected = crypto
+      .createHmac("sha256", SECRET)
+      .update(`${parts.t}.${req.body.toString("utf8")}`)
+      .digest("hex");
+    const ok =
+      parts.v1 &&
+      expected.length === parts.v1.length &&
+      crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts.v1)) &&
+      Math.abs(Date.now() / 1000 - t) < 300;
+    if (!ok) return res.status(400).send("bad signature");
+
+    const event = JSON.parse(req.body.toString("utf8"));
+    if (event.type === "payment_intent.succeeded") {
+      // look up your order by event.data.id and fulfil it (once — dedupe on event.id)
+    }
+    res.sendStatus(200);
+  },
+);
+```
+  </Tab>
+  <Tab value="Go">
+```go
+body, _ := io.ReadAll(r.Body)
+event, err := client.Webhooks.Verify(
+	body,
+	r.Header.Get(wire.SignatureHeader),
+	"whsec_...", // your endpoint's signing secret
+)
+if err != nil {
+	http.Error(w, "bad signature", http.StatusBadRequest)
+	return
+}
+if event.Type == "payment_intent.succeeded" {
+	// fulfil the order
+}
+w.WriteHeader(http.StatusOK)
+```
+  </Tab>
+  <Tab value="Python">
+```python
+event = client.webhooks.verify(
+    request.body,                       # raw bytes
+    request.headers[wire.SIGNATURE_HEADER],
+    "whsec_...",                        # your endpoint's signing secret
+)
+if event.type == "payment_intent.succeeded":
+    ...  # fulfil the order
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+import { SIGNATURE_HEADER } from "@buildry-wire/wire";
+
+const event = wire.webhooks.verify(
+  rawBody, // unparsed request body (string or Buffer)
+  req.headers[SIGNATURE_HEADER.toLowerCase()],
+  "whsec_...", // your endpoint's signing secret
+);
+if (event.type === "payment_intent.succeeded") {
+  // fulfil the order
+}
+```
+  </Tab>
+</Tabs>
+
+## 6. Double-check server-side
+
+Before shipping a high-value order, read the intent back:
+
+```bash
+curl https://api.wire.mn/v1/payment_intents/pi_k3vq7m2xw5nbt4rj6yhc2dpa7e \
+  -H "Authorization: Bearer $WIRE_API_KEY"
+```
+
+Fulfil only when `"status": "succeeded"`. Webhooks are optional — if you don't
+register one, poll this endpoint instead.
+
+## Next steps
+
+- [Hosted checkout](/docs/guides/hosted-checkout) — QR, deeplinks, auto-cancel.
+- [Webhooks](/docs/guides/webhooks) — verify and handle events reliably.
+- [Errors](/docs/concepts/errors) — every error code and how to fix it.
+- [API reference](/docs/api) — every `/v1` endpoint with request and response
+  examples.

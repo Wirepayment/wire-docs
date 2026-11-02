@@ -1,0 +1,39 @@
+---
+title: Ruby SDK
+description: Official Ruby SDK for the Wire payment API.
+---
+
+The official Ruby SDK for [Wire](https://wire.mn).
+
+- **Repository:** [github.com/buildry-wire/wire-ruby](https://github.com/buildry-wire/wire-ruby)
+- **RubyGems:** [rubygems.org/gems/wirepayment](https://rubygems.org/gems/wirepayment)
+
+## Install
+
+```bash
+gem install wirepayment
+```
+
+## First call
+
+```ruby
+client = Wire::Client.new("sk_live_...")
+
+# Amounts are whole tögrög (15000 = 15,000 ₮). Without allowed_operators every operator switched on for your project is used.
+pi = client.payment_intents.create(
+  amount: 15_000,
+  currency: "MNT",
+  description: "Order #1001", # transaction description (optional)
+)
+puts pi["id"], pi["status"]
+
+# Confirm it.
+confirmed = client.payment_intents.confirm(pi["id"], return_url: "https://example.com/return")
+puts confirmed["status"]
+```
+
+## Learn more
+
+- [Quickstart](/en/docs/quickstart)
+- [Webhooks](/en/docs/guides/webhooks)
+- [API reference](/en/docs/api)

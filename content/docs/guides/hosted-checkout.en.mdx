@@ -1,0 +1,120 @@
+---
+title: Hosted checkout
+description: Collect a payment with a Wire-hosted page — QR code, bank deeplinks, and auto-cancel.
+---
+
+Hosted checkout is the fastest way to accept a payment. You create a
+PaymentIntent, open a checkout session for it, and redirect the buyer to a
+Wire-hosted page on `pay.wire.mn`. The page renders a QR code and bank deeplinks
+and cleans up unpaid invoices automatically.
+
+## Flow overview
+
+1. **Create a PaymentIntent.** Leave out `allowed_operators` to offer every
+   operator switched on for your project, or pass a narrower list of operator
+   ids from your dashboard's Connectors page.
+2. **Create a checkout session** for that PaymentIntent. The response includes a
+   hosted `url`.
+3. **Redirect the buyer** to `pay.wire.mn/c/{token}`.
+4. The buyer **pays** via QR or a bank deeplink.
+5. You **confirm** the result from the verified `payment_intent.succeeded`
+   webhook.
+
+<Callout type="warn">
+  When using hosted checkout, do **not** call
+  `/v1/payment_intents/{id}/confirm` — the hosted page handles operator
+  selection and confirmation itself. A checkout session can only be created for
+  an intent still in the `requires_payment_method` state (freshly created,
+  awaiting payment); creating one for an already-confirmed intent returns
+  `payment_intent_unexpected_state`.
+</Callout>
+
+## 1. Create the PaymentIntent
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+pi, err := client.PaymentIntents.Create(ctx, &wire.PaymentIntentCreateParams{
+	Amount:           15000, // 15,000 ₮ — whole tögrög
+	Currency:         "MNT",
+	IdempotencyKey:   "order-1001",
+})
+```
+  </Tab>
+  <Tab value="Python">
+```python
+pi = client.payment_intents.create(
+    amount=15000,                # 15,000 ₮ — whole tögrög
+    currency="MNT",
+    idempotency_key="order-1001",
+)
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+const pi = await wire.paymentIntents.create({
+  amount: 15000,               // 15,000 ₮ — whole tögrög
+  currency: "MNT",
+  idempotencyKey: "order-1001",
+});
+```
+  </Tab>
+</Tabs>
+
+## 2. Create a checkout session
+
+Checkout sessions are created via the REST API with a JSON body. As with every
+`POST`, pass an `Idempotency-Key`.
+
+```bash
+curl https://api.wire.mn/v1/checkout/sessions \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1001-checkout" \
+  -d '{
+    "payment_intent": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+    "success_url": "https://yourshop.mn/orders/1001",
+    "cancel_url": "https://yourshop.mn/cart"
+  }'
+# => {
+#   "id": "cs_w6qz3k2mx5tn4vbr7cyj2hpa5k",
+#   "object": "checkout_session",
+#   "payment_intent": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+#   "status": "open",
+#   "url": "https://pay.wire.mn/c/cs_w6qz3k2mx5tn4vbr7cyj2hpa5k",
+#   ...
+# }
+```
+
+`success_url` and `cancel_url` are **optional**. When set, the buyer is returned
+there after payment; when omitted, the hosted checkout shows its own "payment
+complete" page. If provided, they must be absolute `http(s)` URLs (use HTTPS in
+production); otherwise the API answers `400 checkout_url_invalid`.
+
+## 3. Redirect the buyer
+
+Send the buyer to the returned `url`:
+
+```text
+https://pay.wire.mn/c/{checkout_session_id}
+```
+
+The hosted page shows:
+
+- a **QR code** the buyer scans with any supported banking app;
+- **bank deeplinks** that open the buyer's banking app directly on mobile.
+
+## 4. Auto-cancel
+
+Unpaid invoices are **auto-cancelled** after their TTL expires (**10 minutes**
+by default), so abandoned checkouts don't leave dangling intents. The
+PaymentIntent transitions to a cancelled state and stops accepting payment.
+Create the checkout session right after the intent and redirect the buyer
+promptly — a cancelled intent can't back a new session, so if too much time has
+passed, create a fresh intent.
+
+## 5. Confirm via webhook
+
+When the buyer pays, Wire fires `payment_intent.succeeded`. Verify the signature
+and fulfill the order — see the [Webhooks guide](/docs/guides/webhooks). Do not
+fulfill on the redirect alone.

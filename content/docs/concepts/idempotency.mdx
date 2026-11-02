@@ -1,0 +1,74 @@
+---
+title: Idempotency
+description: Мутаци хийдэг хүсэлтийг давхардал үүсгэхгүйгээр аюулгүй дахин оролд.
+---
+
+Сервер хүсэлтийг боловсруулсны дараа сүлжээний дуудлага бүтэлгүйтэж болно.
+Дахин оролдлогыг аюулгүй болгохын тулд Wire нь мутаци хийдэг `POST` хүсэлтэд
+**idempotency key** дэмждэг.
+
+`Idempotency-Key` header нь `POST` болон `DELETE` бүрд **заавал**
+(PaymentIntent, confirm, cancel, checkout session, refund, webhook endpoint
+г.м.). Байхгүй бол API `400 parameter_missing` (`param: "Idempotency-Key"`)
+буцаана. Key нь 255 тэмдэгт хүртэл.
+
+```bash
+curl https://api.wire.mn/v1/payment_intents \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1001" \
+  -d '{"amount": 15000, "currency": "MNT"}'
+```
+
+Replay хийгдсэн хариу `Idempotent-Replayed: true` header-тэй ирнэ.
+
+## Хэрхэн ажилладаг вэ
+
+- Сервер эхний хүсэлтийн үр дүнг таны key-ийн дор хадгална.
+- **Ижил key**-г дахин илгээвэл анхны хариуг буцаана — давхардсан object
+  үүсэхгүй.
+- Логик үйлдэл бүрд давтагдашгүй, тогтвортой key ашигла (жишээ нь захиалгын id).
+  Жинхэнэ шинэ үйлдэлд шинэ UUID үүсгэ.
+- Key нь **хүсэлт илгээсэн API key-ийн project-д** хамаарна. Тиймээс хоёр
+  project (жишээ нь хоёр сайт) ижил `order-1001` гэдэг key-г бие биедээ
+  саадгүй ашиглаж болно — нэг нь нөгөөгийнхөө хариуг хэзээ ч авахгүй.
+- Хадгалагдсан хариу **48 цаг** амьдарна. Энэ цонхны дотор ижил key бүр анхны
+  хариугаа буцаана; хугацаа өнгөрсний дараа ижил key дахин илгээвэл шинэ
+  үйлдэл болж бүртгэгдэнэ, тиймээс дахин оролдлогоо 48 цагт багтаа.
+
+<Callout type="warn">
+  Эхний хүсэлт хараахан боловсрогдож дуусаагүй байхад ижил key-тэй хоёр дахь
+  хүсэлт ирвэл `409 idempotency_in_flight` буцна. Хэдхэн секунд хүлээгээд дахин
+  илгээхэд бэлэн болсон хариу replay хийгдэнэ —
+  [Алдаа](/docs/concepts/errors)-г үз.
+</Callout>
+
+## SDK ашиглалт
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+pi, err := client.PaymentIntents.Create(ctx, &wire.PaymentIntentCreateParams{
+	Amount:         15000,
+	Currency:       "MNT",
+	IdempotencyKey: "order-1001",
+})
+```
+  </Tab>
+  <Tab value="Python">
+```python
+pi = client.payment_intents.create(
+    amount=15000, currency="MNT", idempotency_key="order-1001",
+)
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+const pi = await wire.paymentIntents.create({
+  amount: 15000,
+  currency: "MNT",
+  idempotencyKey: "order-1001",
+});
+```
+  </Tab>
+</Tabs>

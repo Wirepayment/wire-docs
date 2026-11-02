@@ -1,0 +1,97 @@
+---
+title: Errors
+description: API алдааг хэрхэн дохиолдог, SDK-ууд хэрхэн илэрхийлдэг вэ.
+---
+
+Wire нь ердийн HTTP статус код ашигладаг: амжилтад `2xx`, client-ийн алдаанд
+(буруу оролт, auth, idempotency зөрчил) `4xx`, серверийн алдаанд `5xx`.
+
+Алдааны хариу нь машинд уншигдах `code`, хүнд уншигдах `message`, болон support
+хүсэлтэд иш татаж болох `request_id` агуулна.
+
+## Алдааны дугтуй
+
+Алдаа бүр ижил бүтэцтэй — статус кодоос үл хамааран нэг л `error` объект:
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "code": "amount_invalid",
+    "message": "...",
+    "param": "amount",
+    "request_id": "req_..."
+  }
+}
+```
+
+| Талбар | Утга |
+| --- | --- |
+| `type` | Алдааны ангилал (жишээ нь `invalid_request_error`, `api_error`). |
+| `code` | Тогтвортой, машинд уншигдах код — таны branch логик үүн дээр тулгуурлана. |
+| `message` | Хүнд зориулсан тайлбар. Текст нь өөрчлөгдөж болох тул үүн дээр бүү branch хий. |
+| `param` | Аль оролт буруу байсныг заана (байвал). |
+| `request_id` | Тухайн хүсэлтийн танигч. Логдоо хадгалж, дэмжлэг хүсэхдээ иш тат. |
+
+## Түгээмэл код
+
+| Статус | Утга                                                         |
+| ------ | ------------------------------------------------------------ |
+| `400`  | Буруу хүсэлт (жишээ нь `amount_too_small`).                  |
+| `401`  | API key байхгүй эсвэл хүчингүй (`api_key_missing`, `api_key_invalid`). |
+| `401`  | `test_mode_unavailable` — test key (`sk_test_…`) илгээсэн. Энэ API test key хүлээн авахгүй; live нууц key ашигла. |
+| `402`  | Оператор төлбөрийг татгалзсан (`type: payment_method_error`). |
+| `403`  | `dan_verification_required` — акаунтын эзэн API ашиглахаас өмнө иргэний баталгаажуулалт (ДАН) хийх шаардлагатай. |
+| `403`  | `connector_required` — төлбөр үүсгэхийн өмнө дор хаяж нэг төлбөрийн оператортой холбогдоно. Dashboard → Суваг. |
+| `403`  | `settlement_account_required` — орлого хүлээн авах дансаа сонгоогүй байна. Dashboard → Данс. |
+| `404`  | Object олдсонгүй.                                            |
+| `409`  | Idempotency зөрчил.                                          |
+| `424`  | Оператор алдаа өгсөн эсвэл хугацаа хэтэрсэн (`type: operator_error`, жишээ нь `operator_timeout`). Ижил `Idempotency-Key`-ээр дахин оролд. |
+| `429`  | Rate limit — түр хүлээгээд дахин оролд.                      |
+| `5xx`  | Серверийн алдаа — idempotent хүсэлтийг дахин оролдоход аюулгүй. |
+
+## Түгээмэл гацдаг `400`/`409` кодууд
+
+| Код | Шалтгаан ба шийдэл |
+| --- | --- |
+| `payment_intent_unexpected_state` | Checkout session нь зөвхөн `requires_payment_method` статустай intent дээр үүснэ. Intent аль хэдийн confirm хийгдсэн, цуцлагдсан эсвэл TTL (default 10 минут) дуусаж авто-цуцлагдсан байна. Hosted checkout ашиглаж байгаа бол `/confirm`-ыг бүү дууд — шинэ intent үүсгээд шууд session үүсгэ. |
+| `operator_unknown` (`param: allowed_operators[i]`) | `allowed_operators` доторх утга API дээр байхгүй операторын id (мессеж нь тухайн утгыг нэрлэнэ), эсвэл 10-аас олон утгатай. `allowed_operators`-ыг орхивол project дээр асаасан бүх оператор ашиглагдана; эсвэл id-г dashboard-ын Холболтууд хуудаснаас хуул. |
+| `operator_not_allowed` | Confirm үед: сонгосон оператор `allowed_operators`-т алга, тохирох оператор олдсонгүй, эсвэл операторын холболт идэвхгүй / энэ project дээр асаагүй. |
+| `invalid_json` | Body нь JSON биш. `Content-Type: application/json` header-тэй JSON body илгээ — form-encoded (`curl -d key=value`) хүлээн авахгүй. |
+| `parameter_missing` (`param: Idempotency-Key`) | `POST`, `DELETE` бүрд `Idempotency-Key` header заавал. |
+| `checkout_url_invalid` | `success_url` / `cancel_url` нь бүтэн (absolute) http(s) хаяг байх ёстой. Хоёулаа заавал биш — орхивол hosted хуудас өөрийн **амжилттай** дэлгэцээ харуулна. |
+| `idempotency_in_flight` (409) | Ижил `Idempotency-Key`-тэй эхний хүсэлт боловсруулагдаж дуусаагүй байхад давхар хүсэлт ирсэн. Эхний хариугаа хүлээгээд (эсвэл 1–2 секунд байгаад) дахин илгээ — бэлэн болсон хариу replay болно. |
+
+## SDK дэх алдаа боловсруулалт
+
+SDK бүр `code`, `request_id`, `status_code`-г илрүүлдэг typed алдаа гаргана.
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+var werr *wire.Error
+if errors.As(err, &werr) {
+	fmt.Println(werr.Code, werr.RequestID, werr.StatusCode)
+}
+```
+  </Tab>
+  <Tab value="Python">
+```python
+try:
+    client.payment_intents.create(amount=-1)
+except wire.WireError as e:
+    print(e.code, e.request_id, e.status_code)
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+import { WireError } from "@buildry-wire/wire";
+
+try {
+  await wire.paymentIntents.create({ amount: -1 });
+} catch (e) {
+  if (e instanceof WireError) console.log(e.code, e.requestId, e.statusCode);
+}
+```
+  </Tab>
+</Tabs>

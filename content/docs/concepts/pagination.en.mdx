@@ -1,0 +1,49 @@
+---
+title: Pagination
+description: Page through list endpoints with cursor-based pagination.
+---
+
+List endpoints (charges, events, payment intents, …) are **cursor-paginated**.
+Each response is a `list` object with a `data` array and a `has_more` boolean.
+
+## Parameters
+
+| Parameter        | Description                                                       |
+| ---------------- | ---------------------------------------------------------------- |
+| `limit`          | Page size. Pass to control how many items per request.           |
+| `starting_after` | An object id; returns the page **after** that item.              |
+| `ending_before`  | An object id; returns the page **before** that item.             |
+
+To walk forward, set `starting_after` to the id of the last item from the
+previous page and repeat while `has_more` is `true`.
+
+## Auto-pagination
+
+The SDKs hide the cursor plumbing — iterate and they fetch pages as needed.
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+it := client.Charges.List(ctx, &wire.ListParams{Limit: 50})
+for it.Next() {
+	fmt.Println(it.Current().ID)
+}
+if err := it.Err(); err != nil {
+	log.Fatal(err)
+}
+```
+  </Tab>
+  <Tab value="Python">
+```python
+for charge in client.charges.list(limit=50):
+    print(charge.id)
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+for await (const charge of wire.charges.list({ limit: 50 })) {
+  console.log(charge.id);
+}
+```
+  </Tab>
+</Tabs>

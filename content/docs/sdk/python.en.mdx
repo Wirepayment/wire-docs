@@ -1,0 +1,39 @@
+---
+title: Python SDK
+description: Official Python SDK for the Wire payment API.
+---
+
+The official Python SDK for [Wire](https://wire.mn).
+
+- **Repository:** [github.com/buildry-wire/wire-python](https://github.com/buildry-wire/wire-python)
+- **Package:** [pypi.org/project/wirepayment](https://pypi.org/project/wirepayment/)
+
+## Install
+
+```bash
+pip install wirepayment
+```
+
+## Initialize and make a call
+
+```python
+import wire
+
+client = wire.Client("sk_live_...")
+
+pi = client.payment_intents.create(
+    amount=15000,                  # 15,000 ₮ — whole tögrög
+    currency="MNT",
+    description="Order #1001",      # transaction description (optional)
+    idempotency_key="order-1001",
+)
+print(pi.id, pi.status)
+```
+
+The package installs as `wirepayment` but is imported as `wire`.
+
+## Learn more
+
+- [Quickstart](/docs/quickstart)
+- [Webhooks](/docs/guides/webhooks) — `client.webhooks.verify`
+- [API reference](/docs/api)

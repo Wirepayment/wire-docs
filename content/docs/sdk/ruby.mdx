@@ -1,0 +1,39 @@
+---
+title: Ruby SDK
+description: Wire payment API-ийн албан ёсны Ruby SDK.
+---
+
+[Wire](https://wire.mn)-ийн албан ёсны Ruby SDK.
+
+- **Repository:** [github.com/buildry-wire/wire-ruby](https://github.com/buildry-wire/wire-ruby)
+- **RubyGems:** [rubygems.org/gems/wirepayment](https://rubygems.org/gems/wirepayment)
+
+## Суулгах
+
+```bash
+gem install wirepayment
+```
+
+## Эхлүүлж дуудлага хийх
+
+```ruby
+client = Wire::Client.new("sk_live_...")
+
+# Дүн нь бүхэл төгрөг (15000 = 15,000 ₮). allowed_operators-гүй бол project дээр асаасан бүх оператор ашиглагдана.
+pi = client.payment_intents.create(
+  amount: 15_000,
+  currency: "MNT",
+  description: "Захиалга #1001", # гүйлгээний утга (заавал биш)
+)
+puts pi["id"], pi["status"]
+
+# Баталгаажуул.
+confirmed = client.payment_intents.confirm(pi["id"], return_url: "https://example.com/return")
+puts confirmed["status"]
+```
+
+## Дэлгэрэнгүй
+
+- [Quickstart](/docs/quickstart)
+- [Webhooks](/docs/guides/webhooks)
+- [API reference](/docs/api)

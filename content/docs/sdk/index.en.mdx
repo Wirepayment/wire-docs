@@ -1,0 +1,36 @@
+---
+title: SDKs
+description: Official Wire server and client SDKs.
+---
+
+Wire ships official SDKs for many languages. **Server SDKs** use your secret
+key (`sk_`) to manage PaymentIntents, charges, webhooks, and more. **Client
+checkout SDKs** embed the `pay.wire.mn` hosted checkout into your app or web
+front end — no secret key.
+
+## Server SDKs
+
+| Language | Install | Package |
+|---|---|---|
+| Go | `go get github.com/buildry-wire/wire-go` | [pkg.go.dev](https://pkg.go.dev/github.com/buildry-wire/wire-go) · [guide](/en/docs/sdk/go) |
+| Python | `pip install wirepayment` | [PyPI](https://pypi.org/project/wirepayment/) · [guide](/en/docs/sdk/python) |
+| Node / TypeScript | `npm install @buildry-wire/wire` | [npm](https://www.npmjs.com/package/@buildry-wire/wire) · [guide](/en/docs/sdk/node) |
+| PHP | `composer require buildry-wire/wire-php` | [Packagist](https://packagist.org/packages/buildry-wire/wire-php) · [guide](/en/docs/sdk/php) |
+| Ruby | `gem install wirepayment` | [RubyGems](https://rubygems.org/gems/wirepayment) · [guide](/en/docs/sdk/ruby) |
+| .NET / C# | `dotnet add package Wirepayment` | [NuGet](https://www.nuget.org/packages/Wirepayment) · [guide](/en/docs/sdk/dotnet) |
+
+Every server SDK shares one contract: Bearer `sk_` client, automatic
+idempotency on POST, cursor auto-pagination, typed errors (`request_id`/`status`),
+retry + backoff (429/5xx/network), webhook verification (HMAC-SHA256, fail-closed).
+
+## Client checkout SDKs
+
+No secret key — they present `pay.wire.mn/c/{token}` and poll `GET
+/checkout/{token}/status` as the source of truth.
+
+| Platform | Install | Package |
+|---|---|---|
+| JavaScript | `npm install @buildry-wire/checkout` | [npm](https://www.npmjs.com/package/@buildry-wire/checkout) |
+| iOS (SwiftPM) | `https://github.com/buildry-wire/wire-checkout-ios` (from `1.0.0`) | [repo](https://github.com/buildry-wire/wire-checkout-ios) |
+
+See [Hosted checkout](/en/docs/guides/hosted-checkout).

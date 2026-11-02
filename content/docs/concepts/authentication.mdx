@@ -1,0 +1,45 @@
+---
+title: Authentication
+description: Хүсэлт бүрийг Authorization header дэх нууц API key-ээр баталгаажуул.
+---
+
+Wire API нь хүсэлтийг баталгаажуулахдаа **нууц API key** ашигладаг. Key-гээ
+дуудлага бүрд Bearer token хэлбэрээр дамжуул:
+
+```bash
+curl https://api.wire.mn/v1/payment_intents \
+  -H "Authorization: Bearer sk_live_..."
+```
+
+## Key-ийн төрөл
+
+API нь зөвхөн **live нууц key** (`sk_live_…`) хүлээн авна — хүсэлт бүр бодит
+мөнгө хөдөлгөж, project дээр асаасан оператор руу явна. Test key
+(`sk_test_…`) илгээвэл `401 test_mode_unavailable` буцна.
+
+SDK-ууд client үүсгэх үед key-г авна:
+
+```python
+import wire
+client = wire.Client("sk_live_...")
+```
+
+## Key бүр нэг project-ийнх
+
+API key нь **project бүрт тусдаа** үүснэ. Нэг project-ийн key-ээр өөр
+project-ийн PaymentIntent, charge, webhook endpoint харагдахгүй — хүсэлт бүр
+өөрийн key-ийн project-оор хязгаарлагдана.
+
+Хэд хэдэн сайт, аппликэйшн ажиллуулж байвал тус бүрд нь өөр project, өөр key
+үүсгэ: key алдагдвал зөвхөн тэр project-ийн key-г rotate хийхэд хангалттай,
+бусад нь хөндөгдөхгүй.
+
+## Key-г нууцал
+
+- Нууц key нь account-ийн бүрэн эрх олгоно — тэдгээрийг **хэзээ ч** commit
+  хийх, лог хийх, эсвэл client талын кодод гаргаж болохгүй.
+- Key-г environment variable эсвэл secrets manager-т хадгал.
+- Key алдагдвал нэн даруй сольж rotate хий; хуучин key тэр даруй ажиллахаа болино.
+
+Бүх хүсэлт HTTPS-ээр явах ёстой. Хүчинтэй key-гүй хүсэлт `401 Unauthorized`
+буцаана.

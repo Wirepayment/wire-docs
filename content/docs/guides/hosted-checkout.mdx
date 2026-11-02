@@ -1,0 +1,117 @@
+---
+title: Hosted checkout
+description: Wire-hosted хуудсаар төлбөр цуглуул — QR код, банкны deeplink, авто-цуцлалт.
+---
+
+Hosted checkout бол төлбөр хүлээн авах хамгийн хурдан арга. Та PaymentIntent
+үүсгэж, түүнд checkout session нээгээд, худалдан авагчийг `pay.wire.mn` дээрх
+Wire-hosted хуудас руу чиглүүлнэ. Хуудас нь QR код, банкны deeplink-ийг харуулж,
+төлбөргүй нэхэмжлэхийг автоматаар цэвэрлэдэг.
+
+## Урсгалын тойм
+
+1. **PaymentIntent үүсгэ.** `allowed_operators`-ыг орхивол project дээр асаасан
+   бүх оператор санал болгогдоно; эсвэл dashboard-ын Холболтууд хуудсанд
+   байгаа операторын id-аар хумьсан жагсаалт өг.
+2. Тэр PaymentIntent-д **checkout session үүсгэ**. Хариунд hosted `url` орно.
+3. Худалдан авагчийг `pay.wire.mn/c/{token}` руу **чиглүүл**.
+4. Худалдан авагч QR эсвэл банкны deeplink-ээр **төлнө**.
+5. Та баталгаажуулсан `payment_intent.succeeded` webhook-оос үр дүнг
+   **баталгаажуул**.
+
+<Callout type="warn">
+  Hosted checkout ашиглаж байгаа бол `/v1/payment_intents/{id}/confirm`-ыг
+  **бүү дууд** — оператор сонгох, төлбөр баталгаажуулахыг hosted хуудас өөрөө
+  хийнэ. Checkout session нь зөвхөн `requires_payment_method` статустай
+  (шинээр үүссэн, төлбөр хүлээж буй) intent дээр үүснэ; confirm хийчихсэн
+  intent дээр үүсгэх гэвэл `payment_intent_unexpected_state` алдаа буцна.
+</Callout>
+
+## 1. PaymentIntent үүсгэх
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+pi, err := client.PaymentIntents.Create(ctx, &wire.PaymentIntentCreateParams{
+	Amount:           15000, // 15,000 ₮ — бүхэл төгрөг
+	Currency:         "MNT",
+	IdempotencyKey:   "order-1001",
+})
+```
+  </Tab>
+  <Tab value="Python">
+```python
+pi = client.payment_intents.create(
+    amount=15000,                # 15,000 ₮ — бүхэл төгрөг
+    currency="MNT",
+    idempotency_key="order-1001",
+)
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+const pi = await wire.paymentIntents.create({
+  amount: 15000,               // 15,000 ₮ — бүхэл төгрөг
+  currency: "MNT",
+  idempotencyKey: "order-1001",
+});
+```
+  </Tab>
+</Tabs>
+
+## 2. Checkout session үүсгэх
+
+Checkout session-уудыг REST API-аар JSON body-тэй үүсгэнэ. Бусад бүх `POST`-ийн
+адил `Idempotency-Key` дамжуул.
+
+```bash
+curl https://api.wire.mn/v1/checkout/sessions \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1001-checkout" \
+  -d '{
+    "payment_intent": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+    "success_url": "https://yourshop.mn/orders/1001",
+    "cancel_url": "https://yourshop.mn/cart"
+  }'
+# => {
+#   "id": "cs_w6qz3k2mx5tn4vbr7cyj2hpa5k",
+#   "object": "checkout_session",
+#   "payment_intent": "pi_k3vq7m2xw5nbt4rj6yhc2dpa7e",
+#   "status": "open",
+#   "url": "https://pay.wire.mn/c/cs_w6qz3k2mx5tn4vbr7cyj2hpa5k",
+#   ...
+# }
+```
+
+`success_url` ба `cancel_url` нь **заавал биш**. Оруулбал төлбөрийн дараа худалдан
+авагчийг тэр хаяг руу буцаана; орхивол hosted checkout өөрөө **төлбөр амжилттай**
+хуудсаа харуулна. Оруулах бол бүтэн `http(s)` хаяг байх ёстой (production-д HTTPS ашигла);
+эс бөгөөс API `400 checkout_url_invalid` буцаана.
+
+## 3. Худалдан авагчийг чиглүүлэх
+
+Худалдан авагчийг буцаасан `url` руу илгээ:
+
+```text
+https://pay.wire.mn/c/{checkout_session_id}
+```
+
+Hosted хуудас дараахыг харуулна:
+
+- худалдан авагчийн дэмжигдсэн банкны апп-аар уншуулах **QR код**;
+- мобайл дээр худалдан авагчийн банкны апп-ыг шууд нээх **банкны deeplink**.
+
+## 4. Авто-цуцлалт
+
+Төлбөргүй нэхэмжлэхүүд TTL дуусмагц **автоматаар цуцлагдана** (default **10
+минут**), ингэснээр орхигдсон checkout-ууд унжсан intent үлдээхгүй. PaymentIntent
+цуцлагдсан төлөв рүү шилжиж, төлбөр хүлээн авахаа болино. Тиймээс intent-ээ
+үүсгэсний дараа checkout session-оо шууд үүсгэж, худалдан авагчаа чиглүүл —
+цуцлагдсан intent дээр session үүсэхгүй тул удвал шинэ intent үүсгэ.
+
+## 5. Webhook-оор баталгаажуулах
+
+Худалдан авагч төлбөл Wire `payment_intent.succeeded`-г илгээнэ. Гарын үсгийг
+шалгаж захиалгыг биелүүл — [Webhooks гарын авлага](/docs/guides/webhooks)-г үз.
+Зөвхөн redirect дээр захиалгыг бүү биелүүл.

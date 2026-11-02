@@ -1,0 +1,50 @@
+---
+title: Pagination
+description: List endpoint-уудыг cursor-д суурилсан pagination-аар нэг нэгээр нь үз.
+---
+
+List endpoint-ууд (charges, events, payment intents, …) нь **cursor-paginated**.
+Хариу бүр нь `data` массив болон `has_more` boolean бүхий `list` object байна.
+
+## Параметрүүд
+
+| Параметр         | Тайлбар                                                          |
+| ---------------- | ---------------------------------------------------------------- |
+| `limit`          | Хуудасны хэмжээ. Хүсэлт бүрт хэдэн зүйл буцаахыг хянана.         |
+| `starting_after` | Object id; тухайн зүйлийн **дараах** хуудсыг буцаана.            |
+| `ending_before`  | Object id; тухайн зүйлийн **өмнөх** хуудсыг буцаана.             |
+
+Урагшаа алхахын тулд `starting_after`-г өмнөх хуудасны сүүлийн зүйлийн id болгож,
+`has_more` нь `true` байх хооронд давтан хий.
+
+## Авто-pagination
+
+SDK-ууд cursor-ийн ажиллагааг нуудаг — iterate хийхэд шаардлагатай хуудсыг өөрсдөө
+татна.
+
+<Tabs items={["Go", "Python", "Node"]}>
+  <Tab value="Go">
+```go
+it := client.Charges.List(ctx, &wire.ListParams{Limit: 50})
+for it.Next() {
+	fmt.Println(it.Current().ID)
+}
+if err := it.Err(); err != nil {
+	log.Fatal(err)
+}
+```
+  </Tab>
+  <Tab value="Python">
+```python
+for charge in client.charges.list(limit=50):
+    print(charge.id)
+```
+  </Tab>
+  <Tab value="Node">
+```ts
+for await (const charge of wire.charges.list({ limit: 50 })) {
+  console.log(charge.id);
+}
+```
+  </Tab>
+</Tabs>

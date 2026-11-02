@@ -1,0 +1,44 @@
+---
+title: Authentication
+description: Authenticate every request with a secret API key over the Authorization header.
+---
+
+The Wire API uses **secret API keys** to authenticate requests. Pass your key as
+a Bearer token on every call:
+
+```bash
+curl https://api.wire.mn/v1/payment_intents \
+  -H "Authorization: Bearer sk_live_..."
+```
+
+## Key type
+
+The API accepts **live secret keys** (`sk_live_…`) only — every request moves
+real money through the operators switched on for your project. A test key
+(`sk_test_…`) is refused with `401 test_mode_unavailable`.
+
+The SDKs take the key when you construct the client:
+
+```python
+import wire
+client = wire.Client("sk_live_...")
+```
+
+## Every key belongs to one project
+
+API keys are issued **per project**. A key from one project never reveals
+another project's PaymentIntents, charges, or webhook endpoints — every request
+is scoped to the project of the key it was sent with.
+
+If you run several sites or apps, give each one its own project and its own key:
+when a key leaks you only rotate that project's key, and the rest keep running.
+
+## Keep keys secret
+
+- Secret keys grant full account access — **never** commit them, log them, or
+  expose them in client-side code.
+- Store keys in environment variables or a secrets manager.
+- Rotate a key immediately if it leaks; the old key stops working at once.
+
+All requests must be made over HTTPS. Requests without a valid key return
+`401 Unauthorized`.

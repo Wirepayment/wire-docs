@@ -1,0 +1,40 @@
+---
+title: .NET SDK
+description: Wire payment API-ийн албан ёсны .NET (C#) SDK.
+---
+
+[Wire](https://wire.mn)-ийн албан ёсны .NET (C#) SDK.
+
+- **Repository:** [github.com/buildry-wire/wire-dotnet](https://github.com/buildry-wire/wire-dotnet)
+- **NuGet:** [nuget.org/packages/Wirepayment](https://www.nuget.org/packages/Wirepayment)
+
+## Суулгах
+
+```bash
+dotnet add package Wirepayment
+```
+
+## Эхлүүлж дуудлага хийх
+
+```csharp
+using Wire;
+
+using var wire = new WireClient("sk_live_...");
+
+// Дүн нь бүхэл төгрөг (15000 = 15,000 ₮). allowed_operators-гүй бол project дээр асаасан бүх оператор ашиглагдана.
+var pi = await wire.PaymentIntents.CreateAsync(new PaymentIntentCreateParams
+{
+    Amount = 15000,
+    Currency = "MNT",
+    Description = "Захиалга #1001", // гүйлгээний утга (заавал биш)
+});
+
+var confirmed = await wire.PaymentIntents.ConfirmAsync(pi.Id);
+Console.WriteLine($"{confirmed.Id} {confirmed.Status}");
+```
+
+## Дэлгэрэнгүй
+
+- [Quickstart](/docs/quickstart)
+- [Webhooks](/docs/guides/webhooks)
+- [API reference](/docs/api)
