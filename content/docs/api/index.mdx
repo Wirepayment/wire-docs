@@ -71,6 +71,13 @@ be switched on for this project.
   has no active connection or is not switched on for this project.
 - `400 operator_unknown` (`operator`) — the operator id is not known
   to this API.
+- `400 amount_below_operator_minimum` (`amount`) — the amount is
+  below the smallest amount the chosen operator accepts; `message`
+  names the minimum and the operator. The operator was not called —
+  pick another operator or change the amount.
+- `400 amount_above_operator_maximum` (`amount`) — the amount is
+  above the largest amount the chosen operator accepts; `message`
+  names the maximum and the operator. The operator was not called.
 - `402` (`type: payment_method_error`) — the operator declined; `code`
   is the operator's reason.
 - `424` (`type: operator_error`) — the operator failed or timed out
