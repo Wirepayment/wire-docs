@@ -61,6 +61,15 @@ routing among the project's enabled operators (when
 `allowed_operators`. The operator must have an active connection and
 be switched on for this project.
 
+**Failover.** When automatic routing chose the operator and that
+operator is unavailable (unreachable or failing on its side), Wire
+creates the payment at the next operator in the routing order
+instead — up to two more. It never switches an operator you named in
+`operator`, never after the operator declined the payment, and never
+when `payer_phone` was sent to it (the buyer may already have a
+request in their app). The returned `next_action` is always the one
+to show.
+
 **Errors** (besides the common ones):
 - `404 resource_missing` — no such intent in this project.
 - `400 payment_intent_unexpected_state` — the intent is not in
