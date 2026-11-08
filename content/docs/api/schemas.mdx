@@ -277,5 +277,5 @@ Send only the fields to change.
 | `object` | `"routing_preview"` |  | Always `routing_preview`. |
 | `selected` | `string` |  | The operator routing would pick. |
 | `reason` | `string` |  | Human-readable explanation of the choice. |
-| `fallback_chain` | `string[]` |  | All eligible operators, best first (`[0]` = `selected`). |
+| `fallback_chain` | `string[]` |  | All eligible operators, best first (`[0]` = `selected`). A confirm with automatic routing fails over along this order when the selected operator is unavailable. |
 | `scored` | `object[]` |  | Score breakdown per eligible operator. |
