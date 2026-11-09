@@ -19,7 +19,7 @@ export const COMPANY = {
 
 export const CONTACT = {
   /** Support inbox — mirrored on /terms and /status. */
-  email: "support@wire.mn",
+  email: "usukhbayar@buildry.cloud",
   /** Display form; `phoneHref` is the dialable E.164 form. */
   phone: "+976 9995-5899",
   phoneHref: "tel:+97699955899",
