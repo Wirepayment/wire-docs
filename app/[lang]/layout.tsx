@@ -69,7 +69,9 @@ export default async function LangLayout({
               rel="noopener noreferrer"
               className="inline-flex items-center rounded-full border border-fd-border px-3 py-1 text-[11px] font-medium transition-colors hover:text-fd-foreground"
             >
-              A product by Buildry ↗
+              A product by&nbsp;
+              <span className="font-semibold text-[#2563EB]">Buildry</span>
+              &nbsp;↗
             </a>
           </footer>
         </RootProvider>
