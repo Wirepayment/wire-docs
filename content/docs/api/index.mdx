@@ -222,7 +222,18 @@ has a connection for this operator,
 `credentials` or an invalid `mode`.
 " />
   <Card href="/docs/api/operatorconnections/v1/operator_connections/id/get" title="Retrieve an operator connection" />
-  <Card href="/docs/api/operatorconnections/v1/operator_connections/id/delete" title="Delete an operator connection" />
+  <Card href="/docs/api/operatorconnections/v1/operator_connections/id/delete" title="Delete an operator connection" description="Removes a connection you created with your own credentials. An API
+key belongs to one project while a connection belongs to the whole
+business, so a deletion that would affect more than the key's own
+project is refused.
+
+**Errors:** `409 operator_connection_in_use` — the connection has
+received payments; switch it off in the dashboard instead,
+`409 operator_connection_managed` — the connection was provisioned by
+Wire and is managed in the dashboard,
+`409 operator_connection_shared` — another project of the business
+has this operator switched on.
+" />
   <Card href="/docs/api/operatorconnections/v1/operator_connections/id/test/post" title="Test an operator connection" description="Checks that the operator is available and the stored credentials can
 be read. On success (`status: ok`) a `byo` connection becomes
 `active`; a connection Wire provisioned for you (`reseller`) is only

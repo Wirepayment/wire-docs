@@ -1187,6 +1187,18 @@ paths:
     delete:
       tags: [OperatorConnections]
       summary: Delete an operator connection
+      description: |
+        Removes a connection you created with your own credentials. An API
+        key belongs to one project while a connection belongs to the whole
+        business, so a deletion that would affect more than the key's own
+        project is refused.
+
+        **Errors:** `409 operator_connection_in_use` — the connection has
+        received payments; switch it off in the dashboard instead,
+        `409 operator_connection_managed` — the connection was provisioned by
+        Wire and is managed in the dashboard,
+        `409 operator_connection_shared` — another project of the business
+        has this operator switched on.
       parameters:
         - $ref: "#/components/parameters/OperatorConnectionID"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -1204,6 +1216,18 @@ paths:
                     deleted: true
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The connection cannot be deleted — see the codes above.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                in_use:
+                  value:
+                    error:
+                      type: invalid_request_error
+                      code: operator_connection_in_use
+                      message: this connection has received payments and cannot be deleted
 
   /v1/operator_connections/{id}/test:
     post:
