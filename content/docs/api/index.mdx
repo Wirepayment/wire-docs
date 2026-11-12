@@ -228,7 +228,9 @@ business, so a deletion that would affect more than the key's own
 project is refused.
 
 **Errors:** `409 operator_connection_in_use` — the connection has
-received payments; switch it off in the dashboard instead,
+received payments, or a payment through it is still open (cancel the
+payment or let it expire first); switch it off in the dashboard
+instead,
 `409 operator_connection_managed` — the connection was provisioned by
 Wire and is managed in the dashboard,
 `409 operator_connection_shared` — another project of the business
