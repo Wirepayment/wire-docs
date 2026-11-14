@@ -82,6 +82,74 @@ export function summarize(description: string | undefined, max = 200): string {
   return stop > max / 2 ? cut.slice(0, stop + 1) : `${cut.trimEnd()}…`;
 }
 
+// The share card from app/opengraph-image.tsx. A page that sets its own
+// `openGraph` loses the file-based image, so docMetadata names it.
+export const SHARE_IMAGE = {
+  url: "/opengraph-image",
+  width: 1200,
+  height: 630,
+  alt: "Wire Docs — payment gateway API for Mongolia",
+};
+
+/** What a page with no description of its own says about itself: generated
+ *  API reference pages for plain reads ship none, and an empty snippet lets
+ *  the search engine pick arbitrary text. */
+export function fallbackDescription(title: string, lang: string): string {
+  return lang === "en"
+    ? `${title} — Wire API reference: request, response and errors.`
+    : `${title} — Wire API-ийн лавлах: хүсэлт, хариу, алдааны кодууд.`;
+}
+
+/** schema.org for a docs page: the article itself and where it sits. Facts
+ *  already on the page only (title, description, language, URL). */
+export function docJsonLd(
+  getPage: GetPage,
+  page: DocPage,
+  lang: string,
+): object {
+  const urls = languageUrls(getPage, page.slugs);
+  const url = urls[lang] ?? urls[DEFAULT_LANG] ?? absolute(page.url);
+  const isHome = page.slugs.length === 0;
+  const title = isHome ? homeTitle(lang) : page.data.title;
+  const description =
+    summarize(page.data.description) || fallbackDescription(title, lang);
+  const home = absolute(lang === DEFAULT_LANG ? "/docs" : `/${lang}/docs`);
+  const crumbs = isHome
+    ? [{ name: SITE_NAME, url }]
+    : [
+        { name: SITE_NAME, url: home },
+        { name: title, url },
+      ];
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "TechArticle",
+        "@id": url,
+        url,
+        headline: title,
+        description,
+        inLanguage: lang === "en" ? "en" : "mn",
+        isPartOf: { "@type": "WebSite", name: SITE_NAME, url: DOCS_URL },
+        publisher: {
+          "@type": "Organization",
+          name: "Wire",
+          url: "https://wire.mn",
+        },
+      },
+      {
+        "@type": "BreadcrumbList",
+        itemListElement: crumbs.map((c, i) => ({
+          "@type": "ListItem",
+          position: i + 1,
+          name: c.name,
+          item: c.url,
+        })),
+      },
+    ],
+  };
+}
+
 export function docMetadata(
   getPage: GetPage,
   page: DocPage,
@@ -92,7 +160,8 @@ export function docMetadata(
   const canonical = own ?? urls[DEFAULT_LANG] ?? absolute(page.url);
   const isHome = page.slugs.length === 0;
   const title = isHome ? homeTitle(lang) : page.data.title;
-  const description = summarize(page.data.description);
+  const description =
+    summarize(page.data.description) || fallbackDescription(title, lang);
 
   const languages: Record<string, string> = {};
   if (own && Object.keys(urls).length > 1) {
@@ -114,8 +183,14 @@ export function docMetadata(
       title,
       description,
       locale: lang === "en" ? "en_US" : "mn_MN",
+      images: [SHARE_IMAGE],
     },
-    twitter: { card: "summary", title, description },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [SHARE_IMAGE.url],
+    },
   };
 }
 
