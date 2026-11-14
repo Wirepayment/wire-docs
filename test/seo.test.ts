@@ -5,7 +5,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   DOCS_URL,
+  docJsonLd,
   docMetadata,
+  fallbackDescription,
   sitemapEntries,
   summarize,
   translation,
@@ -15,6 +17,7 @@ import {
 import { cleanMarkdown, llmsIndex, llmsPage } from "@/lib/llms";
 import { ALLOWED_CRAWLERS } from "@/lib/crawlers";
 import robots from "@/app/robots";
+import { config as middlewareConfig } from "@/middleware";
 import { brandNames } from "./brand-names";
 
 // A tiny fake of the fumadocs loader: quickstart is translated, the API
@@ -76,6 +79,99 @@ describe("docMetadata()", () => {
     expect(meta.title).toEqual({
       absolute: "Wire Docs — Монголын төлбөрийн gateway API",
     });
+  });
+});
+
+describe("share image and description", () => {
+  // A page-level openGraph drops the file-based image, so every docs URL
+  // shipped without og:image until 2026-11-15.
+  it("names the share image on every page, in both cards", () => {
+    for (const [key, p] of Object.entries(PAGES)) {
+      const meta = docMetadata(getPage, p, key.split(":")[0]!);
+      expect(JSON.stringify(meta.openGraph), key).toContain("/opengraph-image");
+      expect(JSON.stringify(meta.twitter), key).toContain("/opengraph-image");
+      expect(JSON.stringify(meta.twitter), key).toContain(
+        "summary_large_image",
+      );
+    }
+    expect(
+      readFileSync(
+        path.resolve(import.meta.dirname, "../app/opengraph-image.tsx"),
+        "utf8",
+      ),
+    ).toContain("ImageResponse");
+  });
+
+  // The i18n middleware rewrites any path it matches under a language, where
+  // the image does not exist: every share card would be a 404.
+  it("keeps the share image out of the language middleware", () => {
+    const [matcher] = middlewareConfig.matcher;
+    const skipped = new RegExp(`^${matcher}$`);
+    expect(skipped.test("/opengraph-image")).toBe(false);
+    expect(skipped.test("/docs/quickstart")).toBe(true);
+  });
+
+  it("describes a page that ships no description of its own", () => {
+    const bare: DocPage = {
+      slugs: ["api", "get"],
+      url: "/docs/api/get",
+      path: "api/get.mdx",
+      data: { title: "Retrieve a payment" },
+    };
+    const get: GetPage = (slugs, lang) =>
+      lang === "mn" && slugs.join("/") === "api/get" ? bare : undefined;
+    for (const lang of ["mn", "en"]) {
+      const meta = docMetadata(get, bare, lang);
+      expect(meta.description).toBe(
+        fallbackDescription("Retrieve a payment", lang),
+      );
+      expect(meta.description).toContain("Retrieve a payment");
+    }
+    // A page with its own description keeps it.
+    expect(
+      docMetadata(getPage, PAGES["mn:quickstart"]!, "mn").description,
+    ).toBe("Description.");
+  });
+});
+
+describe("docJsonLd()", () => {
+  type Node = Record<string, unknown> & { "@type": string };
+  const graph = (key: string) =>
+    (
+      docJsonLd(getPage, PAGES[key]!, key.split(":")[0]!) as {
+        "@graph": Node[];
+      }
+    )["@graph"];
+
+  it("describes the page as a TechArticle at its canonical URL", () => {
+    for (const key of Object.keys(PAGES)) {
+      const lang = key.split(":")[0]!;
+      const article = graph(key).find((n) => n["@type"] === "TechArticle")!;
+      const meta = docMetadata(getPage, PAGES[key]!, lang);
+      expect(article.url, key).toBe(meta.alternates?.canonical);
+      expect(article.description, key).toBe(meta.description);
+      expect(article.inLanguage, key).toBe(lang);
+    }
+  });
+
+  it("places a page under the docs home of its language", () => {
+    const crumbs = graph("en:quickstart").find(
+      (n) => n["@type"] === "BreadcrumbList",
+    ) as unknown as { itemListElement: { position: number; item: string }[] };
+    expect(crumbs.itemListElement.map((c) => [c.position, c.item])).toEqual([
+      [1, `${DOCS_URL}/en/docs`],
+      [2, `${DOCS_URL}/en/docs/quickstart`],
+    ]);
+    const home = graph("mn:").find(
+      (n) => n["@type"] === "BreadcrumbList",
+    ) as unknown as { itemListElement: unknown[] };
+    expect(home.itemListElement).toHaveLength(1);
+  });
+
+  it("invents no ratings and names no brand", () => {
+    const json = JSON.stringify(graph("mn:quickstart"));
+    expect(json).not.toMatch(/aggregateRating|"review"/i);
+    expect(brandNames(json)).toEqual([]);
   });
 });
 

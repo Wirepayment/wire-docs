@@ -9,7 +9,7 @@ import { notFound } from "next/navigation";
 import { getMDXComponents } from "@/mdx-components";
 import type { Metadata } from "next";
 import { createRelativeLink } from "fumadocs-ui/mdx";
-import { docMetadata, type DocPage } from "@/lib/seo";
+import { docJsonLd, docMetadata, type DocPage } from "@/lib/seo";
 
 export default async function Page(props: {
   params: Promise<{ lang: string; slug?: string[] }>;
@@ -20,8 +20,21 @@ export default async function Page(props: {
 
   const MDX = page.data.body;
 
+  // `<` is escaped so page copy can never close the script tag early.
+  const jsonLd = JSON.stringify(
+    docJsonLd(
+      (slugs, lang) => source.getPage(slugs, lang) as DocPage | undefined,
+      page as DocPage,
+      params.lang,
+    ),
+  ).replace(/</g, "\\u003c");
+
   return (
     <DocsPage toc={page.data.toc} full={page.data.full}>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: jsonLd }}
+      />
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription>{page.data.description}</DocsDescription>
       <DocsBody>
