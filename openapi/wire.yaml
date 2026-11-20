@@ -127,9 +127,11 @@ paths:
 
         **Next step.** Either create a checkout session for the intent (hosted
         page — recommended) or call `/v1/payment_intents/{id}/confirm`
-        yourself. Do not do both. By default an intent expires **10 minutes**
-        after creation (`expires_at`); an expired, unpaid intent is canceled
-        automatically.
+        yourself. Do not do both. By default an intent expires **1 hour**
+        after creation; send `expires_at` to choose your own payment window
+        (5 minutes to 24 hours from now). An expired, unpaid intent is
+        canceled automatically, and the operator invoice opened at confirm
+        closes by the same deadline.
 
         **Errors** (besides the common ones):
         - `400 parameter_missing` (`amount`) — `amount` omitted.
@@ -138,6 +140,8 @@ paths:
           1,000,000,000.
         - `400 currency_unsupported` — `currency` is not `MNT`.
         - `400 parameter_invalid` (`description`) — longer than 500 bytes.
+        - `400 expires_at_invalid` (`expires_at`) — not between 5 minutes and
+          24 hours from now.
         - `400 operator_unknown` (param `allowed_operators[i]`, the message
           names the offending value) — an `allowed_operators` entry is not an
           operator id available on this API, or the list has more than 10
@@ -1725,6 +1729,17 @@ components:
           additionalProperties: { type: string, maxLength: 500 }
           description: Your own key/value strings (e.g. your order id), returned on every read. Up to 50 keys; keys 1–40 characters; values up to 500 characters. Violations → `400 metadata_invalid`.
           examples: [{ order_id: "1001" }]
+        expires_at:
+          type: integer
+          description: |
+            Optional. Your payment deadline, Unix seconds (UTC), 5 minutes to
+            24 hours from now — e.g. your own order's reservation window, so
+            your order and the payment expire together. Omit it for the default
+            of 1 hour after creation. The operator invoice opened at confirm
+            closes by this deadline; an operator that cannot shorten its
+            invoice keeps its own lifetime, and the intent's `expires_at` then
+            shows that. Outside the range → `400 expires_at_invalid`.
+          examples: [1791777600]
 
     PaymentIntentConfirm:
       type: object
@@ -1796,7 +1811,7 @@ components:
           examples: [1791774000]
         expires_at:
           type: [integer, "null"]
-          description: When an unpaid intent expires, Unix seconds (UTC). By default 10 minutes after creation; confirm may replace it with the operator invoice's own expiry. Expired unpaid intents are canceled automatically.
+          description: When an unpaid intent expires, Unix seconds (UTC) — the `expires_at` you sent, else 1 hour after creation. Confirm keeps it as the operator invoice's deadline, unless the operator cannot shorten its invoice (then its own expiry). Expired unpaid intents are canceled automatically.
           examples: [1791774600]
 
     NextAction:
