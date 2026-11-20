@@ -189,8 +189,8 @@ Response:
 
 `requires_payment_method` is the normal starting state ("waiting for the
 buyer"), not an error. Save the `id` with your order. The intent expires after
-**10 minutes** by default (`expires_at`), so move on to the next step right
-away.
+**1 hour** by default (`expires_at`). To match your own order window, send
+`expires_at` (Unix seconds, 5 minutes to 24 hours from now) when you create it.
 
 ## 4. Send the buyer to hosted checkout
 

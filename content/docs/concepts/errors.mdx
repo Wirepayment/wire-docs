@@ -54,7 +54,7 @@ Wire нь ердийн HTTP статус код ашигладаг: амжилт
 
 | Код | Шалтгаан ба шийдэл |
 | --- | --- |
-| `payment_intent_unexpected_state` | Checkout session нь зөвхөн `requires_payment_method` статустай intent дээр үүснэ. Intent аль хэдийн confirm хийгдсэн, цуцлагдсан эсвэл TTL (default 10 минут) дуусаж авто-цуцлагдсан байна. Hosted checkout ашиглаж байгаа бол `/confirm`-ыг бүү дууд — шинэ intent үүсгээд шууд session үүсгэ. |
+| `payment_intent_unexpected_state` | Checkout session нь зөвхөн `requires_payment_method` статустай intent дээр үүснэ. Intent аль хэдийн confirm хийгдсэн, цуцлагдсан эсвэл хугацаа (`expires_at`, default 1 цаг) дуусаж авто-цуцлагдсан байна. Hosted checkout ашиглаж байгаа бол `/confirm`-ыг бүү дууд — шинэ intent үүсгээд шууд session үүсгэ. |
 | `operator_unknown` (`param: allowed_operators[i]`) | `allowed_operators` доторх утга API дээр байхгүй операторын id (мессеж нь тухайн утгыг нэрлэнэ), эсвэл 10-аас олон утгатай. `allowed_operators`-ыг орхивол project дээр асаасан бүх оператор ашиглагдана; эсвэл id-г dashboard-ын Холболтууд хуудаснаас хуул. |
 | `operator_not_allowed` | Confirm үед: сонгосон оператор `allowed_operators`-т алга, тохирох оператор олдсонгүй, эсвэл операторын холболт идэвхгүй / энэ project дээр асаагүй. |
 | `invalid_json` | Body нь JSON биш. `Content-Type: application/json` header-тэй JSON body илгээ — form-encoded (`curl -d key=value`) хүлээн авахгүй. |

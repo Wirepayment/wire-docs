@@ -1,0 +1,54 @@
+---
+title: Several accounts
+description: When your business has several bank accounts, choose which one each payment goes to.
+---
+
+If your business has several bank accounts, you can choose which account
+**each** payment settles into. A payment with no choice goes to your
+**default** account (the one set per operator).
+
+## Find your accounts
+
+Accounts are added in the dashboard's **Accounts** section. List them with the
+API:
+
+```bash
+curl https://api.wire.mn/v1/bank_accounts \
+  -H "Authorization: Bearer $WIRE_SECRET_KEY"
+```
+
+Each account comes with its `id` (`ba_…`), bank, the **last four digits** of
+the account number, and the holder name. Only accounts with
+`settlement_selectable: true` can be chosen for a payment.
+
+<Callout type="info">
+  An API key sees **only its own business's** accounts. Even when one owner has
+  several businesses, one business's key cannot see — or choose — another
+  business's account. All projects of a business share the same accounts.
+</Callout>
+
+## Choose an account per payment
+
+Send `settlement_account` when you create the PaymentIntent:
+
+```bash
+curl https://api.wire.mn/v1/payment_intents \
+  -H "Authorization: Bearer $WIRE_SECRET_KEY" \
+  -H "Idempotency-Key: order-1024" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 15000, "settlement_account": "ba_m2qk7t4xw5nbv3rj6yhc2dpa4e"}'
+```
+
+- The payment goes **only to that account**. If the account was disconnected,
+  the payment is refused — it never moves to another account.
+- The intent is limited to operators that can name the account on each invoice
+  (shown in `allowed_operators`).
+- Errors: `400 settlement_account_invalid` (not your account, or not
+  connected), `400 settlement_account_unsupported` (no such operator in
+  `allowed_operators`).
+
+## Without code — payment links
+
+Pick a **Receiving account** when you create a
+[payment link](/docs/guides/payment-links) and every payment through that link
+goes to the chosen account.
