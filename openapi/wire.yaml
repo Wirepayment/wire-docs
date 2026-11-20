@@ -64,6 +64,14 @@ info:
     return `403 connector_required` (no active operator connection switched
     on for this project) or `403 settlement_account_required` (no bank
     account chosen for that operator to pay into). Fix both in the dashboard.
+
+    Creating and confirming a payment intent can also return
+    `403 account_holder_mismatch`: the bank account the payment would settle
+    into (your default, or the one named in `settlement_account`) is not in
+    the business's own name — an organisation's name, or for an individual
+    the owner's verified name. Payments resume as soon as an account in the
+    right name is added on the dashboard's Accounts page (it becomes the
+    default). Payments already made are not affected.
 servers:
   - url: https://api.wire.mn
     description: Production
@@ -156,6 +164,8 @@ paths:
         - `400 metadata_invalid` — over 50 keys, an empty key, a key over
           40 characters or a value over 500 characters.
         - `403 connector_required` / `403 settlement_account_required`.
+        - `403 account_holder_mismatch` — the receiving account is not in the
+          business's own name (see the introduction).
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -354,6 +364,8 @@ paths:
         - `424` (`type: operator_error`) — the operator failed or timed out
           (`operator_timeout`). Safe to retry with the same `Idempotency-Key`.
         - `403 connector_required` / `403 settlement_account_required`.
+        - `403 account_holder_mismatch` — the receiving account is not in the
+          business's own name (see the introduction).
       parameters:
         - $ref: "#/components/parameters/PaymentIntentID"
         - $ref: "#/components/parameters/IdempotencyKey"

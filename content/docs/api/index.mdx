@@ -46,6 +46,8 @@ closes by the same deadline.
 - `400 metadata_invalid` — over 50 keys, an empty key, a key over
   40 characters or a value over 500 characters.
 - `403 connector_required` / `403 settlement_account_required`.
+- `403 account_holder_mismatch` — the receiving account is not in the
+  business's own name (see the introduction).
 " />
   <Card href="/docs/api/paymentintents/v1/payment_intents/id/get" title="Retrieve a PaymentIntent" description="Returns one PaymentIntent. Poll this (or listen for the
 `payment_intent.succeeded` webhook) to learn whether the buyer paid.
@@ -98,6 +100,8 @@ to show.
 - `424` (`type: operator_error`) — the operator failed or timed out
   (`operator_timeout`). Safe to retry with the same `Idempotency-Key`.
 - `403 connector_required` / `403 settlement_account_required`.
+- `403 account_holder_mismatch` — the receiving account is not in the
+  business's own name (see the introduction).
 " />
   <Card href="/docs/api/paymentintents/v1/payment_intents/id/cancel/post" title="Cancel a PaymentIntent" description="Cancels an intent that has not been paid. Allowed from
 `requires_payment_method`, `requires_action`, `requires_capture` and
