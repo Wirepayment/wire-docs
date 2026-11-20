@@ -54,7 +54,7 @@ Every failure has the same shape — one `error` object, whatever the status cod
 
 | Code | Cause and fix |
 | --- | --- |
-| `payment_intent_unexpected_state` | A checkout session can only be created for an intent in the `requires_payment_method` state. The intent was already confirmed, cancelled, or auto-cancelled after its TTL (10 minutes by default). When using hosted checkout, don't call `/confirm` — create a fresh intent and open the session right away. |
+| `payment_intent_unexpected_state` | A checkout session can only be created for an intent in the `requires_payment_method` state. The intent was already confirmed, cancelled, or auto-cancelled at its `expires_at` (1 hour by default). When using hosted checkout, don't call `/confirm` — create a fresh intent and open the session right away. |
 | `operator_unknown` (`param: allowed_operators[i]`) | An `allowed_operators` entry is not an operator id available on the API (the message names the value), or the list has more than 10 entries. Omit `allowed_operators` to use every operator switched on for your project, or copy ids from the dashboard's Connectors page. |
 | `operator_not_allowed` | At confirm: the chosen operator is not in `allowed_operators`, no eligible operator was found, or the operator has no active connection / is not switched on for this project. |
 | `invalid_json` | The body is not JSON. Send `Content-Type: application/json` and a JSON body — form-encoded bodies (`curl -d key=value`) are not accepted. |

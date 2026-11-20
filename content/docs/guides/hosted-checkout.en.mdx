@@ -106,12 +106,16 @@ The hosted page shows:
 
 ## 4. Auto-cancel
 
-Unpaid invoices are **auto-cancelled** after their TTL expires (**10 minutes**
-by default), so abandoned checkouts don't leave dangling intents. The
+Unpaid invoices are **auto-cancelled** at the intent's `expires_at` (**1 hour**
+by default; send `expires_at` at creation for 5 minutes to 24 hours), so abandoned checkouts don't leave dangling intents. The
 PaymentIntent transitions to a cancelled state and stops accepting payment.
 Create the checkout session right after the intent and redirect the buyer
 promptly — a cancelled intent can't back a new session, so if too much time has
 passed, create a fresh intent.
+
+If the buyer switches channel on the payment page and then pays through one of
+them, Wire **cancels the invoices left open** on the others itself — a paid
+intent never gets a new invoice.
 
 ## 5. Confirm via webhook
 
