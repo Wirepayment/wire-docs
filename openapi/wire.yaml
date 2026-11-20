@@ -109,6 +109,10 @@ tags:
       the same records.
   - name: Routing
     description: Explain which operator automatic routing would choose.
+  - name: BankAccounts
+    description: |
+      The business's settlement bank accounts (managed on the dashboard).
+      List them to name one as a payment's `settlement_account`.
 
 paths:
   /v1/payment_intents:
@@ -142,6 +146,8 @@ paths:
         - `400 parameter_invalid` (`description`) — longer than 500 bytes.
         - `400 expires_at_invalid` (`expires_at`) — not between 5 minutes and
           24 hours from now.
+        - `400 settlement_account_invalid` / `settlement_account_unsupported`
+          (`settlement_account`) — see the field.
         - `400 operator_unknown` (param `allowed_operators[i]`, the message
           names the offending value) — an `allowed_operators` entry is not an
           operator id available on this API, or the list has more than 10
@@ -1318,6 +1324,45 @@ paths:
                         fee_minor: 0
         "400": { $ref: "#/components/responses/InvalidRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/bank_accounts:
+    get:
+      tags: [BankAccounts]
+      summary: List bank accounts
+      description: |
+        Returns the business's settlement bank accounts — the same list for
+        every project key of the business. Only the last four digits of the
+        account number are shown. An account with `settlement_selectable:
+        true` can be named as `settlement_account` when creating a
+        PaymentIntent, to have that payment settle into it instead of the
+        default account. Accounts are added and connected on the dashboard.
+      responses:
+        "200":
+          description: The business's bank accounts.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/BankAccount" }
+              examples:
+                list:
+                  value:
+                    object: list
+                    url: /v1/bank_accounts
+                    has_more: false
+                    data:
+                      - id: ba_m2qk7t4xw5nbv3rj6yhc2dpa4e
+                        object: bank_account
+                        bank_code: "050000"
+                        account_number_last4: "4567"
+                        holder_name: Example LLC
+                        is_default: true
+                        settlement_selectable: true
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
 webhooks:
   payment_intent.succeeded:
@@ -1740,6 +1785,20 @@ components:
             invoice keeps its own lifetime, and the intent's `expires_at` then
             shows that. Outside the range → `400 expires_at_invalid`.
           examples: [1791777600]
+        settlement_account:
+          type: string
+          description: |
+            Optional. The id (`ba_…`) of one of your bank accounts this payment
+            must settle into, instead of your default account — for a business
+            that collects into several accounts. Must be an account with
+            `settlement_selectable: true` (`GET /v1/bank_accounts`). The payment
+            is then limited to the operators that can pay into a chosen account
+            per payment; `allowed_operators` that names none of them →
+            `400 settlement_account_unsupported`. An unknown or unconnected
+            account → `400 settlement_account_invalid` (also at confirm, if the
+            account was disconnected since). Never silently paid into another
+            account.
+          examples: [ba_m2qk7t4xw5nbv3rj6yhc2dpa4e]
 
     PaymentIntentConfirm:
       type: object
@@ -1813,6 +1872,23 @@ components:
           type: [integer, "null"]
           description: When an unpaid intent expires, Unix seconds (UTC) — the `expires_at` you sent, else 1 hour after creation. Confirm keeps it as the operator invoice's deadline, unless the operator cannot shorten its invoice (then its own expiry). Expired unpaid intents are canceled automatically.
           examples: [1791774600]
+        settlement_account:
+          type: [string, "null"]
+          description: The bank account (`ba_…`) you named for this payment, else `null` (your default account).
+          examples: [null]
+
+    BankAccount:
+      type: object
+      properties:
+        id: { type: string, description: "Unique id, prefix `ba_`.", examples: [ba_m2qk7t4xw5nbv3rj6yhc2dpa4e] }
+        object: { type: string, const: bank_account, description: Always `bank_account`. }
+        bank_code: { type: string, description: Bank code., examples: ["050000"] }
+        account_number_last4: { type: string, description: Last four digits of the account number., examples: ["4567"] }
+        holder_name: { type: string, description: Account holder name. }
+        is_default: { type: boolean, description: Whether payments settle here when no `settlement_account` is named. }
+        settlement_selectable:
+          type: boolean
+          description: Whether this account can be named as a PaymentIntent's `settlement_account` (it is connected to an operator that takes a receiving account per payment).
 
     NextAction:
       type: object
