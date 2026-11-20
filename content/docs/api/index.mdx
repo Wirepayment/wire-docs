@@ -36,6 +36,8 @@ closes by the same deadline.
 - `400 parameter_invalid` (`description`) — longer than 500 bytes.
 - `400 expires_at_invalid` (`expires_at`) — not between 5 minutes and
   24 hours from now.
+- `400 settlement_account_invalid` / `settlement_account_unsupported`
+  (`settlement_account`) — see the field.
 - `400 operator_unknown` (param `allowed_operators[i]`, the message
   names the offending value) — an `allowed_operators` entry is not an
   operator id available on this API, or the list has more than 10
@@ -256,6 +258,13 @@ for the key's project.
 **Errors:** `400 invalid_request_error` (`amount`) — `amount` missing
 or not a positive integer; `400 operator_unavailable` — no operator
 is eligible.
+" />
+  <Card href="/docs/api/bankaccounts/v1/bank_accounts/get" title="List bank accounts" description="Returns the business's settlement bank accounts — the same list for
+every project key of the business. Only the last four digits of the
+account number are shown. An account with `settlement_selectable:
+true` can be named as `settlement_account` when creating a
+PaymentIntent, to have that payment settle into it instead of the
+default account. Accounts are added and connected on the dashboard.
 " />
   <Card href="/docs/api/schemas" title="Object schemas" description="Every object's fields, types and required flags on one page." />
 </Cards>

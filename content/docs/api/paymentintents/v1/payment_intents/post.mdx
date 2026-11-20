@@ -27,6 +27,8 @@ description: |
   - `400 parameter_invalid` (`description`) — longer than 500 bytes.
   - `400 expires_at_invalid` (`expires_at`) — not between 5 minutes and
     24 hours from now.
+  - `400 settlement_account_invalid` / `settlement_account_unsupported`
+    (`settlement_account`) — see the field.
   - `400 operator_unknown` (param `allowed_operators[i]`, the message
     names the offending value) — an `allowed_operators` entry is not an
     operator id available on this API, or the list has more than 10
@@ -70,6 +72,8 @@ _openapi:
           - `400 parameter_invalid` (`description`) — longer than 500 bytes.
           - `400 expires_at_invalid` (`expires_at`) — not between 5 minutes and
             24 hours from now.
+          - `400 settlement_account_invalid` / `settlement_account_unsupported`
+            (`settlement_account`) — see the field.
           - `400 operator_unknown` (param `allowed_operators[i]`, the message
             names the offending value) — an `allowed_operators` entry is not an
             operator id available on this API, or the list has more than 10
