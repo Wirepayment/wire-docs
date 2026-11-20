@@ -48,6 +48,7 @@ Error envelope returned with every non-2xx status.
 | `automatic_operator` | `boolean` |  | `true` (default): at confirm, Wire routes to the best eligible operator. `false`: the first entry of `allowed_operators` is used unless `/confirm` names an `operator` — so with `false` you must send `allowed_operators` or an explicit operator. |
 | `allowed_operators` | `string[]` |  | Optional. Restricts which operators may be used for this intent. **Omit it** to allow every operator switched on for your project (recommended). Values are operator ids enabled on your account, as shown on the dashboard's Connectors page. An unknown id → `400 operator_unknown` with param `allowed_operators[i]` naming the offending value; more than 10 entries is also refused. |
 | `metadata` | `object` |  | Your own key/value strings (e.g. your order id), returned on every read. Up to 50 keys; keys 1–40 characters; values up to 500 characters. Violations → `400 metadata_invalid`. |
+| `expires_at` | `integer` |  | Optional. Your payment deadline, Unix seconds (UTC), 5 minutes to 24 hours from now — e.g. your own order's reservation window, so your order and the payment expire together. Omit it for the default of 1 hour after creation. The operator invoice opened at confirm closes by this deadline; an operator that cannot shorten its invoice keeps its own lifetime, and the intent's `expires_at` then shows that. Outside the range → `400 expires_at_invalid`. |
 
 ## PaymentIntentConfirm
 
@@ -76,7 +77,7 @@ Optional body for confirm. An empty body (or no body) is valid.
 | `metadata` | `object` |  | Your key/value strings; `{}` when none. |
 | `livemode` | `boolean` |  | Always `true` on this API (the object was created with a live key). |
 | `created` | `integer` |  | Creation time, Unix seconds (UTC). |
-| `expires_at` | `integer \| null` |  | When an unpaid intent expires, Unix seconds (UTC). By default 10 minutes after creation; confirm may replace it with the operator invoice's own expiry. Expired unpaid intents are canceled automatically. |
+| `expires_at` | `integer \| null` |  | When an unpaid intent expires, Unix seconds (UTC) — the `expires_at` you sent, else 1 hour after creation. Confirm keeps it as the operator invoice's deadline, unless the operator cannot shorten its invoice (then its own expiry). Expired unpaid intents are canceled automatically. |
 
 ## NextAction
 
