@@ -44,6 +44,7 @@ Every failure has the same shape — one `error` object, whatever the status cod
 | `403`  | `dan_verification_required` — the account owner must complete citizen identity verification (DAN) before the API can be used. |
 | `403`  | `connector_required` — connect at least one payment operator before creating payments. Dashboard → Connectors. |
 | `403`  | `settlement_account_required` — choose the bank account the operator pays into. Dashboard → Accounts. |
+| `403`  | `account_holder_mismatch` — the receiving account is not in the business owner's name. Don't retry: add an account in the owner's name under Dashboard → Accounts ([guide](/docs/guides/business-ownership)). |
 | `404`  | Object not found.                                            |
 | `409`  | Idempotency conflict.                                        |
 | `424`  | The operator failed or timed out (`type: operator_error`, e.g. `operator_timeout`). Retry with the same `Idempotency-Key`. |
