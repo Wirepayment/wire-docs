@@ -1,0 +1,63 @@
+---
+title: Whose name to register in
+description: How to register a business, its projects and its receiving account under the right owner.
+---
+
+On Wire a business is registered by its **real owner**, and income goes only to an
+account in **the owner's own name**. The Wire platform's AML agent checks the business
+owner and the account against the citizen identity verification (DAN).
+
+| Business type | Owner | Receiving account |
+| --- | --- | --- |
+| Individual | The person verified with DAN | In that person's own name |
+| Company | The director named in the registration confirms with DAN | In the company's name |
+
+## Find your case
+
+| Situation | What to do |
+| --- | --- |
+| Your own business | Register with your own DAN and connect an account in your name. |
+| You build a site for a client | The client signs up and invites you as a member under **Team**. |
+| An employee or relative is helping | The same: the owner signs up and invites them as a member. |
+| One owner, several shops | Don't open a new business. Add a **project** per shop. |
+| You also own a company with its own register | Register a separate business for that company. |
+| You already registered on someone's behalf | The real owner named in the registration confirms with DAN through Wire's link. |
+
+<Callout type="warn">
+  **One legal entity = one business.** The dashboard refuses a second business
+  on the same register. Your next shop becomes a project in the business you
+  already have.
+</Callout>
+
+## For developers and agencies
+
+1. The client signs up at `app.wire.mn` **with their own DAN** and registers the business.
+2. The client invites you as a member under **Team** in the dashboard.
+3. You set up the projects, connections, API keys and webhooks in that business.
+4. Income goes straight to the account in **the client's** name.
+
+A member runs the business like the owner, but deletions are the owner's alone. Don't
+register a client's business with your own DAN: you would become its owner, and it
+would fail the account check.
+
+## Several shops, several accounts
+
+Create a separate project per shop inside one business (up to 10). Each project has its own API
+key and webhook. To receive income into another account in your name, pass
+`settlement_account` on each payment. See [Several accounts](/docs/guides/settlement-accounts).
+
+## Not allowed
+
+- Taking income through an account in the name of a relative, friend or employee.
+- Collecting income on someone's behalf and passing it on later.
+- Registering a business with another person's DAN.
+- Opening a new business in place of a blocked one to keep taking payments.
+
+## When the check fails
+
+If the account is not in the business's name, new payments stop with
+`403 account_holder_mismatch`. Completed transactions are not affected.
+
+**Don't retry** this error. Add an account in the owner's name under **Accounts** in the
+dashboard and payments resume automatically. If the registered owner does not match,
+the real owner confirms with DAN.
