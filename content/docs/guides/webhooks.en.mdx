@@ -153,6 +153,10 @@ double-check a delivery, or list missed ones with `GET /v1/events`.
 Delivery retries: a `5xx`, `408`, `429` or network error is retried; any other
 `4xx` drops the delivery, so answer `2xx` once you've accepted the event.
 
+If payment events stop reaching your endpoint, Wire emails the owner of an
+active business once a day. Fix the endpoint, then resend missed events from
+Dashboard → Webhook or fetch them with `GET /v1/events`.
+
 ## 4. Verify in your handler
 
 Always verify against the **raw, unparsed request body** — parsing first will
